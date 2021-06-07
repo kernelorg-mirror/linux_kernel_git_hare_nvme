@@ -252,7 +252,7 @@ static int nvme_submit_io(struct nvme_ns *ns, struct nvme_user_io __user *uio)
 	memset(&c, 0, sizeof(c));
 	c.rw.opcode = io.opcode;
 	c.rw.flags = io.flags;
-	c.rw.nsid = cpu_to_le32(ns->head->ns_id);
+	c.rw.nsid = cpu_to_le32(ns->ns_id);
 	c.rw.slba = cpu_to_le64(io.slba);
 	c.rw.length = cpu_to_le16(io.nblocks);
 	c.rw.control = cpu_to_le16(io.control);
@@ -268,10 +268,10 @@ static int nvme_submit_io(struct nvme_ns *ns, struct nvme_user_io __user *uio)
 static bool nvme_validate_passthru_nsid(struct nvme_ctrl *ctrl,
 					struct nvme_ns *ns, __u32 nsid)
 {
-	if (ns && nsid != ns->head->ns_id) {
+	if (ns && nsid != ns->ns_id) {
 		dev_err(ctrl->device,
 			"%s: nsid (%u) in cmd does not match nsid (%u) of namespace\n",
-			current->comm, nsid, ns->head->ns_id);
+			current->comm, nsid, ns->ns_id);
 		return false;
 	}
 
@@ -584,7 +584,7 @@ static int nvme_ns_ioctl(struct nvme_ns *ns, unsigned int cmd,
 	switch (cmd) {
 	case NVME_IOCTL_ID:
 		force_successful_syscall_return();
-		return ns->head->ns_id;
+		return ns->ns_id;
 	case NVME_IOCTL_IO_CMD:
 		return nvme_user_cmd(ns->ctrl, ns, argp, flags, open_for_write);
 	/*

@@ -909,13 +909,13 @@ static int nvme_update_ana_state(struct nvme_ctrl *ctrl,
 		unsigned nsid;
 again:
 		nsid = le32_to_cpu(desc->nsids[n]);
-		if (ns->head->ns_id < nsid)
+		if (ns->ns_id < nsid)
 			continue;
-		if (ns->head->ns_id == nsid)
+		if (ns->ns_id == nsid)
 			nvme_update_ns_ana_state(desc, ns);
 		if (++n == nr_nsids)
 			break;
-		if (ns->head->ns_id > nsid)
+		if (ns->ns_id > nsid)
 			goto again;
 	}
 	srcu_read_unlock(&ctrl->srcu, srcu_idx);

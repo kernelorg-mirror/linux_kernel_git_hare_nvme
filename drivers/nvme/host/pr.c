@@ -58,7 +58,7 @@ static int nvme_send_ns_head_pr_command(struct block_device *bdev,
 	int ret = -EWOULDBLOCK;
 
 	if (ns) {
-		c->common.nsid = cpu_to_le32(ns->head->ns_id);
+		c->common.nsid = cpu_to_le32(ns->ns_id);
 		ret = nvme_submit_sync_cmd(ns->queue, c, data, data_len);
 	}
 	srcu_read_unlock(&head->srcu, srcu_idx);
@@ -68,7 +68,7 @@ static int nvme_send_ns_head_pr_command(struct block_device *bdev,
 static int nvme_send_ns_pr_command(struct nvme_ns *ns, struct nvme_command *c,
 		void *data, unsigned int data_len)
 {
-	c->common.nsid = cpu_to_le32(ns->head->ns_id);
+	c->common.nsid = cpu_to_le32(ns->ns_id);
 	return nvme_submit_sync_cmd(ns->queue, c, data, data_len);
 }
 
