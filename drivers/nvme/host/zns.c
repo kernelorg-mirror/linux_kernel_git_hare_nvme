@@ -49,12 +49,12 @@ int nvme_query_zone_info(struct nvme_ns *ns, unsigned lbaf,
 		if (test_and_clear_bit(NVME_NS_FORCE_RO, &ns->flags))
 			dev_warn(ns->ctrl->device,
 				 "Zone Append supported for zoned namespace:%d. Remove read-only mode\n",
-				 ns->head->ns_id);
+				 ns->ns_id);
 	} else {
 		set_bit(NVME_NS_FORCE_RO, &ns->flags);
 		dev_warn(ns->ctrl->device,
 			 "Zone Append not supported for zoned namespace:%d. Forcing to read-only mode\n",
-			 ns->head->ns_id);
+			 ns->ns_id);
 	}
 
 	/* Lazily query controller append limit for the first zoned namespace */
@@ -69,7 +69,7 @@ int nvme_query_zone_info(struct nvme_ns *ns, unsigned lbaf,
 		return -ENOMEM;
 
 	c.identify.opcode = nvme_admin_identify;
-	c.identify.nsid = cpu_to_le32(ns->head->ns_id);
+	c.identify.nsid = cpu_to_le32(ns->ns_id);
 	c.identify.cns = NVME_ID_CNS_CS_NS;
 	c.identify.csi = NVME_CSI_ZNS;
 
@@ -84,7 +84,7 @@ int nvme_query_zone_info(struct nvme_ns *ns, unsigned lbaf,
 	if (id->zoc) {
 		dev_warn(ns->ctrl->device,
 			"zone operations:%x not supported for namespace:%u\n",
-			le16_to_cpu(id->zoc), ns->head->ns_id);
+			le16_to_cpu(id->zoc), ns->ns_id);
 		status = -ENODEV;
 		goto free_data;
 	}
@@ -93,7 +93,7 @@ int nvme_query_zone_info(struct nvme_ns *ns, unsigned lbaf,
 	if (!is_power_of_2(zi->zone_size)) {
 		dev_warn(ns->ctrl->device,
 			"invalid zone size: %llu for namespace: %u\n",
-			zi->zone_size, ns->head->ns_id);
+			zi->zone_size, ns->ns_id);
 		status = -ENODEV;
 		goto free_data;
 	}
@@ -190,7 +190,7 @@ int nvme_ns_report_zones(struct nvme_ns *ns, sector_t sector,
 		return -ENOMEM;
 
 	c.zmr.opcode = nvme_cmd_zone_mgmt_recv;
-	c.zmr.nsid = cpu_to_le32(ns->head->ns_id);
+	c.zmr.nsid = cpu_to_le32(ns->ns_id);
 	c.zmr.numd = cpu_to_le32(nvme_bytes_to_numd(buflen));
 	c.zmr.zra = NVME_ZRA_ZONE_REPORT;
 	c.zmr.zrasf = NVME_ZRASF_ZONE_REPORT_ALL;
@@ -239,7 +239,7 @@ blk_status_t nvme_setup_zone_mgmt_send(struct nvme_ns *ns, struct request *req,
 	memset(c, 0, sizeof(*c));
 
 	c->zms.opcode = nvme_cmd_zone_mgmt_send;
-	c->zms.nsid = cpu_to_le32(ns->head->ns_id);
+	c->zms.nsid = cpu_to_le32(ns->ns_id);
 	c->zms.slba = cpu_to_le64(nvme_sect_to_lba(ns->head, blk_rq_pos(req)));
 	c->zms.zsa = action;
 

@@ -108,6 +108,7 @@ static ssize_t wwid_show(struct device *dev, struct device_attribute *attr,
 	struct nvme_subsystem *subsys = head->subsys;
 	int serial_len = sizeof(subsys->serial);
 	int model_len = sizeof(subsys->model);
+	unsigned nsid = nvme_get_ns_from_dev(dev)->ns_id;
 
 	if (!uuid_is_null(&ids->uuid))
 		return sysfs_emit(buf, "uuid.%pU\n", &ids->uuid);
@@ -126,8 +127,7 @@ static ssize_t wwid_show(struct device *dev, struct device_attribute *attr,
 		model_len--;
 
 	return sysfs_emit(buf, "nvme.%04x-%*phN-%*phN-%08x\n", subsys->vendor_id,
-		serial_len, subsys->serial, model_len, subsys->model,
-		head->ns_id);
+		serial_len, subsys->serial, model_len, subsys->model, nsid);
 }
 static DEVICE_ATTR_RO(wwid);
 
@@ -165,7 +165,7 @@ static DEVICE_ATTR_RO(eui);
 static ssize_t nsid_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
 {
-	return sysfs_emit(buf, "%d\n", dev_to_ns_head(dev)->ns_id);
+	return sysfs_emit(buf, "%d\n", nvme_get_ns_from_dev(dev)->ns_id);
 }
 static DEVICE_ATTR_RO(nsid);
 

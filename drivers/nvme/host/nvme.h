@@ -522,6 +522,7 @@ struct nvme_ns {
 	struct list_head siblings;
 	struct kref kref;
 	struct nvme_ns_head *head;
+	unsigned ns_id;
 
 	unsigned long flags;
 #define NVME_NS_REMOVING	0
