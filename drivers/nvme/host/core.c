@@ -130,6 +130,7 @@ static LIST_HEAD(nvme_subsystems);
 DEFINE_MUTEX(nvme_subsystems_lock);
 
 static DEFINE_IDA(nvme_instance_ida);
+static DEFINE_IDA(nvme_subsystem_ida);
 static dev_t nvme_ctrl_base_chr_devt;
 static int nvme_class_uevent(const struct device *dev, struct kobj_uevent_env *env);
 static const struct class nvme_class = {
@@ -3137,8 +3138,7 @@ static void nvme_release_subsystem(struct device *dev)
 	struct nvme_subsystem *subsys =
 		container_of(dev, struct nvme_subsystem, dev);
 
-	if (subsys->instance >= 0)
-		ida_free(&nvme_instance_ida, subsys->instance);
+	ida_free(&nvme_subsystem_ida, subsys->instance);
 	kfree(subsys);
 }
 
@@ -3244,7 +3244,12 @@ static int nvme_init_subsystem(struct nvme_ctrl *ctrl, struct nvme_id_ctrl *id)
 	if (!subsys)
 		return -ENOMEM;
 
-	subsys->instance = -1;
+	ret = ida_alloc(&nvme_subsystem_ida, GFP_KERNEL);
+	if (ret < 0) {
+		kfree(subsys);
+		return ret;
+	}
+	subsys->instance = ret;
 	mutex_init(&subsys->lock);
 	kref_init(&subsys->ref);
 	INIT_LIST_HEAD(&subsys->ctrls);
@@ -3266,6 +3271,7 @@ static int nvme_init_subsystem(struct nvme_ctrl *ctrl, struct nvme_id_ctrl *id)
 		dev_err(ctrl->device,
 			"Subsystem %s is not a discovery controller",
 			subsys->subnqn);
+		ida_free(&nvme_subsystem_ida, subsys->instance);
 		kfree(subsys);
 		return -EINVAL;
 	}
@@ -3274,7 +3280,7 @@ static int nvme_init_subsystem(struct nvme_ctrl *ctrl, struct nvme_id_ctrl *id)
 	subsys->dev.class = &nvme_subsys_class;
 	subsys->dev.release = nvme_release_subsystem;
 	subsys->dev.groups = nvme_subsys_attrs_groups;
-	dev_set_name(&subsys->dev, "nvme-subsys%d", ctrl->instance);
+	dev_set_name(&subsys->dev, "nvme-subsys%d", subsys->instance);
 	device_initialize(&subsys->dev);
 
 	mutex_lock(&nvme_subsystems_lock);
@@ -3307,8 +3313,6 @@ static int nvme_init_subsystem(struct nvme_ctrl *ctrl, struct nvme_id_ctrl *id)
 		goto out_put_subsystem;
 	}
 
-	if (!found)
-		subsys->instance = ctrl->instance;
 	ctrl->subsys = subsys;
 	list_add_tail(&ctrl->subsys_entry, &subsys->ctrls);
 	mutex_unlock(&nvme_subsystems_lock);
@@ -5079,8 +5083,7 @@ static void nvme_free_ctrl(struct device *dev)
 
 	if (ctrl->admin_q)
 		blk_put_queue(ctrl->admin_q);
-	if (!subsys || ctrl->instance != subsys->instance)
-		ida_free(&nvme_instance_ida, ctrl->instance);
+	ida_free(&nvme_instance_ida, ctrl->instance);
 	nvme_free_cels(ctrl);
 	nvme_mpath_uninit(ctrl);
 	cleanup_srcu_struct(&ctrl->srcu);
@@ -5476,6 +5479,7 @@ static void __exit nvme_core_exit(void)
 	destroy_workqueue(nvme_wq);
 	ida_destroy(&nvme_ns_chr_minor_ida);
 	ida_destroy(&nvme_instance_ida);
+	ida_destroy(&nvme_subsystem_ida);
 }
 
 MODULE_LICENSE("GPL");
