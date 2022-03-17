@@ -697,7 +697,8 @@ static void nvme_remove_head_work(struct work_struct *work)
 	module_put(THIS_MODULE);
 }
 
-int nvme_mpath_alloc_disk(struct nvme_ctrl *ctrl, struct nvme_ns_head *head)
+int nvme_mpath_alloc_disk(struct nvme_subsystem *subsys,
+		struct nvme_ns_head *head)
 {
 	struct queue_limits lim;
 
@@ -719,7 +720,7 @@ int nvme_mpath_alloc_disk(struct nvme_ctrl *ctrl, struct nvme_ns_head *head)
 	 * unique.
 	 */
 	if (!multipath_always_on) {
-		if (!(ctrl->subsys->cmic & NVME_CTRL_CMIC_MULTI_CTRL) ||
+		if (!(subsys->cmic & NVME_CTRL_CMIC_MULTI_CTRL) ||
 				!multipath)
 			return 0;
 	}
@@ -734,7 +735,7 @@ int nvme_mpath_alloc_disk(struct nvme_ctrl *ctrl, struct nvme_ns_head *head)
 	if (head->ids.csi == NVME_CSI_ZNS)
 		lim.features |= BLK_FEAT_ZONED;
 
-	head->disk = blk_alloc_disk(&lim, ctrl->numa_node);
+	head->disk = blk_alloc_disk(&lim, NUMA_NO_NODE);
 	if (IS_ERR(head->disk))
 		return PTR_ERR(head->disk);
 	head->disk->fops = &nvme_ns_head_ops;
@@ -750,7 +751,7 @@ int nvme_mpath_alloc_disk(struct nvme_ctrl *ctrl, struct nvme_ns_head *head)
 	 */
 	set_bit(GD_SUPPRESS_PART_SCAN, &head->disk->state);
 	sprintf(head->disk->disk_name, "nvme%dn%d",
-			ctrl->subsys->instance, head->instance);
+			subsys->instance, head->instance);
 	nvme_tryget_ns_head(head);
 	return 0;
 }
