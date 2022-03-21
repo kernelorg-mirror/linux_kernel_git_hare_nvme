@@ -165,7 +165,12 @@ static DEVICE_ATTR_RO(eui);
 static ssize_t nsid_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
 {
-	return sysfs_emit(buf, "%d\n", nvme_get_ns_from_dev(dev)->ns_id);
+	struct gendisk *disk = dev_to_disk(dev);
+
+	if (nvme_disk_is_ns_head(disk))
+		return sysfs_emit(buf, "%d\n", dev_to_ns_head(dev)->ns_id);
+	else
+		return sysfs_emit(buf, "%d\n", nvme_get_ns_from_dev(dev)->ns_id);
 }
 static DEVICE_ATTR_RO(nsid);
 
