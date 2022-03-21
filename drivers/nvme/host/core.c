@@ -22,7 +22,9 @@
 #include <linux/nvme_ioctl.h>
 #include <linux/pm_qos.h>
 #include <linux/ratelimit.h>
+#include <linux/hex.h>
 #include <linux/unaligned.h>
+#include <generated/utsrelease.h>
 
 #include "nvme.h"
 #include "fabrics.h"
@@ -94,6 +96,10 @@ static unsigned long apst_secondary_latency_tol_us = 100000;
 module_param(apst_secondary_latency_tol_us, ulong, 0644);
 MODULE_PARM_DESC(apst_secondary_latency_tol_us,
 	"secondary APST latency tolerance in us");
+
+static bool ns_subsys;
+module_param(ns_subsys, bool, 0644);
+MODULE_PARM_DESC(ns_subsys, "Per-namespace virtual subsystems");
 
 /*
  * Older kernels didn't enable protection information if it was at an offset.
@@ -3107,14 +3113,14 @@ static void nvme_init_subnqn(struct nvme_subsystem *subsys, struct nvme_ctrl *ct
 	size_t nqnlen;
 	int off;
 
-	if(!(ctrl->quirks & NVME_QUIRK_IGNORE_DEV_SUBNQN)) {
+	if(!ctrl || !(ctrl->quirks & NVME_QUIRK_IGNORE_DEV_SUBNQN)) {
 		nqnlen = strnlen(id->subnqn, NVMF_NQN_SIZE);
 		if (nqnlen > 0 && nqnlen < NVMF_NQN_SIZE) {
 			strscpy(subsys->subnqn, id->subnqn, NVMF_NQN_SIZE);
 			return;
 		}
 
-		if (ctrl->vs >= NVME_VS(1, 2, 1))
+		if (ctrl && ctrl->vs >= NVME_VS(1, 2, 1))
 			dev_warn(ctrl->device, "missing or invalid SUBNQN field.\n");
 	}
 
@@ -3820,9 +3826,10 @@ static const struct file_operations nvme_dev_fops = {
 };
 
 static struct nvme_ns_head *nvme_find_ns_head(struct nvme_subsystem *subsys,
-		unsigned nsid)
+		struct nvme_ns_info *info)
 {
 	struct nvme_ns_head *h;
+	unsigned int nsid = ns_subsys ? 1 : info->nsid;
 
 	lockdep_assert_held(&subsys->lock);
 
@@ -3955,7 +3962,10 @@ static struct nvme_ns_head *nvme_alloc_ns_head(struct nvme_subsystem *subsys,
 	if (ret)
 		goto out_ida_remove;
 	head->subsys = subsys;
-	head->ns_id = info->nsid;
+	if (ns_subsys)
+		head->ns_id = 1;
+	else
+		head->ns_id = info->nsid;
 	head->ids = info->ids;
 	head->shared = info->is_shared;
 	head->rotational = info->is_rotational;
@@ -4018,12 +4028,73 @@ static int nvme_global_check_duplicate_ids(struct nvme_subsystem *this,
 	return ret;
 }
 
+static struct nvme_subsystem *nvme_generate_ns_subsys(struct nvme_ns_info *info)
+{
+	struct nvme_id_ctrl *ns_subsys_id;
+	struct nvme_ns_ids *ids = &info->ids;
+	struct nvme_subsystem *subsys, *found;
+	char serial[10];
+	int ret;
+
+	ns_subsys_id = kzalloc(sizeof(*ns_subsys_id), GFP_KERNEL);
+	if (!ns_subsys_id)
+		return ERR_PTR(-ENOMEM);
+	snprintf(ns_subsys_id->subnqn, NVMF_NQN_SIZE,
+		 "nvme.2014.08.org.nvmexpress:uuid.%pU", &ids->uuid);
+	memcpy(ns_subsys_id->mn, "Linux", 6);
+	get_random_bytes(&serial, sizeof(serial));
+	bin2hex(ns_subsys_id->sn, &serial, sizeof(serial));
+	memcpy_and_pad(ns_subsys_id->fr, sizeof(ns_subsys_id->fr),
+		       UTS_RELEASE, strlen(UTS_RELEASE), ' ');
+	ns_subsys_id->cmic = NVME_CTRL_CMIC_MULTI_PORT |
+		NVME_CTRL_CMIC_MULTI_CTRL | NVME_CTRL_CMIC_ANA;
+
+	subsys = nvme_alloc_subsystem(NULL, ns_subsys_id);
+	if (!subsys)
+		return ERR_PTR(-ENOMEM);
+	mutex_lock(&nvme_subsystems_lock);
+	found = __nvme_find_get_subsystem(subsys->subnqn);
+	if (found) {
+		put_device(&subsys->dev);
+		subsys = found;
+	} else {
+		ret = device_add(&subsys->dev);
+		if (ret) {
+			pr_err("failed to register subsystem '%s'.\n",
+			       dev_name(&subsys->dev));
+			put_device(&subsys->dev);
+			goto out_unlock;
+		}
+		list_add_tail(&subsys->entry, &nvme_subsystems);
+	}
+out_unlock:
+	mutex_unlock(&nvme_subsystems_lock);
+	kfree(ns_subsys_id);
+	return subsys;
+}
+
 static int nvme_init_ns_head(struct nvme_ns *ns, struct nvme_ns_info *info)
 {
 	struct nvme_ctrl *ctrl = ns->ctrl;
 	struct nvme_subsystem *subsys = ctrl->subsys;
 	struct nvme_ns_head *head = NULL;
 	int ret;
+
+	if (info->is_shared && ns_subsys) {
+		/*
+		 * nvme_generate_ns_subsys() increases the subsystem
+		 * refcount, so we need to take care to decrease it
+		 * again once we leave this function to not end up
+		 * with a refcount imbalance and the per-namespace
+		 * subsystem never to be deleted.
+		 */
+		subsys = nvme_generate_ns_subsys(info);
+		if (IS_ERR(subsys)) {
+			dev_err(ctrl->device,
+				"failed to allocate virtual subsys\n");
+			return PTR_ERR(subsys);
+		}
+	}
 
 	ret = nvme_global_check_duplicate_ids(subsys, &info->ids);
 	if (ret) {
@@ -4050,7 +4121,7 @@ static int nvme_init_ns_head(struct nvme_ns *ns, struct nvme_ns_info *info)
 			dev_err(ctrl->device,
 				"ignoring nsid %d because of duplicate IDs\n",
 				info->nsid);
-			return ret;
+			goto out_put;
 		}
 
 		dev_err(ctrl->device,
@@ -4064,7 +4135,7 @@ static int nvme_init_ns_head(struct nvme_ns *ns, struct nvme_ns_info *info)
 	}
 
 	mutex_lock(&subsys->lock);
-	head = nvme_find_ns_head(subsys, info->nsid);
+	head = nvme_find_ns_head(subsys, info);
 	if (!head) {
 		ret = nvme_subsys_check_duplicate_ids(subsys, &info->ids);
 		if (ret) {
@@ -4106,6 +4177,8 @@ static int nvme_init_ns_head(struct nvme_ns *ns, struct nvme_ns_info *info)
 	list_add_tail_rcu(&ns->siblings, &head->list);
 	ns->head = head;
 	mutex_unlock(&subsys->lock);
+	if (subsys != ctrl->subsys)
+		nvme_put_subsystem(subsys);
 
 #ifdef CONFIG_NVME_MULTIPATH
 	if (cancel_delayed_work(&head->remove_work))
@@ -4117,6 +4190,9 @@ out_put_ns_head:
 	nvme_put_ns_head(head);
 out_unlock:
 	mutex_unlock(&subsys->lock);
+out_put:
+	if (subsys != ctrl->subsys)
+		nvme_put_subsystem(subsys);
 	return ret;
 }
 
@@ -4203,11 +4279,11 @@ static void nvme_alloc_ns(struct nvme_ctrl *ctrl, struct nvme_ns_info *info)
 	 * devices.
 	 */
 	if (nvme_ns_head_multipath(ns->head)) {
-		sprintf(disk->disk_name, "nvme%dc%dn%d", ctrl->subsys->instance,
+		sprintf(disk->disk_name, "nvme%dc%dn%d", ns->head->subsys->instance,
 			ctrl->instance, ns->head->instance);
 		disk->flags |= GENHD_FL_HIDDEN;
 	} else if (multipath) {
-		sprintf(disk->disk_name, "nvme%dn%d", ctrl->subsys->instance,
+		sprintf(disk->disk_name, "nvme%dn%d", ns->head->subsys->instance,
 			ns->head->instance);
 	} else {
 		sprintf(disk->disk_name, "nvme%dn%d", ctrl->instance,
@@ -4249,7 +4325,7 @@ static void nvme_alloc_ns(struct nvme_ctrl *ctrl, struct nvme_ns_info *info)
 	mutex_unlock(&ctrl->namespaces_lock);
 	synchronize_srcu(&ctrl->srcu);
  out_unlink_ns:
-	mutex_lock(&ctrl->subsys->lock);
+	mutex_lock(&ns->head->subsys->lock);
 	list_del_rcu(&ns->siblings);
 	if (list_empty(&ns->head->list)) {
 		list_del_init(&ns->head->entry);
@@ -4264,7 +4340,7 @@ static void nvme_alloc_ns(struct nvme_ctrl *ctrl, struct nvme_ns_info *info)
 		if (ns->head->disk)
 			last_path = true;
 	}
-	mutex_unlock(&ctrl->subsys->lock);
+	mutex_unlock(&ns->head->subsys->lock);
 	if (last_path)
 		nvme_put_ns_head(ns->head);
 	nvme_put_ns_head(ns->head);
@@ -4295,14 +4371,14 @@ static void nvme_ns_remove(struct nvme_ns *ns)
 	if (nvme_mpath_clear_current_path(ns))
 		synchronize_srcu(&ns->head->srcu);
 
-	mutex_lock(&ns->ctrl->subsys->lock);
+	mutex_lock(&ns->head->subsys->lock);
 	list_del_rcu(&ns->siblings);
 	if (list_empty(&ns->head->list)) {
 		if (!nvme_mpath_queue_if_no_path(ns->head))
 			list_del_init(&ns->head->entry);
 		last_path = true;
 	}
-	mutex_unlock(&ns->ctrl->subsys->lock);
+	mutex_unlock(&ns->head->subsys->lock);
 
 	/* guarantee not available in head->list */
 	synchronize_srcu(&ns->head->srcu);
