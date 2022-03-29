@@ -3500,14 +3500,14 @@ static const struct file_operations nvme_dev_fops = {
 	.uring_cmd	= nvme_dev_uring_cmd,
 };
 
-static struct nvme_ns_head *nvme_find_ns_head(struct nvme_ctrl *ctrl,
+static struct nvme_ns_head *nvme_find_ns_head(struct nvme_subsystem *subsys,
 		unsigned nsid)
 {
 	struct nvme_ns_head *h;
 
-	lockdep_assert_held(&ctrl->subsys->lock);
+	lockdep_assert_held(&subsys->lock);
 
-	list_for_each_entry(h, &ctrl->subsys->nsheads, entry) {
+	list_for_each_entry(h, &subsys->nsheads, entry) {
 		/*
 		 * Private namespaces can share NSIDs under some conditions.
 		 * In that case we can't use the same ns_head for namespaces
@@ -3744,7 +3744,7 @@ static int nvme_init_ns_head(struct nvme_ns *ns, struct nvme_ns_info *info)
 	}
 
 	mutex_lock(&subsys->lock);
-	head = nvme_find_ns_head(ctrl, info->nsid);
+	head = nvme_find_ns_head(subsys, info->nsid);
 	if (!head) {
 		ret = nvme_subsys_check_duplicate_ids(subsys, &info->ids);
 		if (ret) {
