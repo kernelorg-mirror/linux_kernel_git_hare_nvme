@@ -3235,23 +3235,25 @@ static bool nvme_validate_cntlid(struct nvme_subsystem *subsys,
 	return true;
 }
 
-static int nvme_init_subsystem(struct nvme_ctrl *ctrl, struct nvme_id_ctrl *id)
+static struct nvme_subsystem *nvme_alloc_subsystem(struct nvme_ctrl *ctrl,
+						   struct nvme_id_ctrl *id)
 {
-	struct nvme_subsystem *subsys, *found;
+	struct nvme_subsystem *subsys;
 	int ret;
 
 	subsys = kzalloc_obj(*subsys);
 	if (!subsys)
-		return -ENOMEM;
+		return NULL;
 
 	ret = ida_alloc(&nvme_subsystem_ida, GFP_KERNEL);
 	if (ret < 0) {
 		kfree(subsys);
-		return ret;
+		return NULL;
 	}
 	subsys->instance = ret;
 	mutex_init(&subsys->lock);
 	kref_init(&subsys->ref);
+	ida_init(&subsys->ns_ida);
 	INIT_LIST_HEAD(&subsys->ctrls);
 	INIT_LIST_HEAD(&subsys->nsheads);
 	nvme_init_subnqn(subsys, ctrl, id);
@@ -3267,6 +3269,26 @@ static int nvme_init_subsystem(struct nvme_ctrl *ctrl, struct nvme_id_ctrl *id)
 	else
 		subsys->subtype = NVME_NQN_NVME;
 
+	nvme_mpath_default_iopolicy(subsys);
+
+	subsys->dev.class = &nvme_subsys_class;
+	subsys->dev.release = nvme_release_subsystem;
+	subsys->dev.groups = nvme_subsys_attrs_groups;
+	dev_set_name(&subsys->dev, "nvme-subsys%d", subsys->instance);
+	device_initialize(&subsys->dev);
+
+	return subsys;
+}
+
+static int nvme_init_subsystem(struct nvme_ctrl *ctrl, struct nvme_id_ctrl *id)
+{
+	struct nvme_subsystem *subsys, *found;
+	int ret;
+
+	subsys = nvme_alloc_subsystem(ctrl, id);
+	if (!subsys)
+		return -ENOMEM;
+
 	if (nvme_discovery_ctrl(ctrl) && subsys->subtype != NVME_NQN_DISC) {
 		dev_err(ctrl->device,
 			"Subsystem %s is not a discovery controller",
@@ -3275,13 +3297,6 @@ static int nvme_init_subsystem(struct nvme_ctrl *ctrl, struct nvme_id_ctrl *id)
 		kfree(subsys);
 		return -EINVAL;
 	}
-	nvme_mpath_default_iopolicy(subsys);
-
-	subsys->dev.class = &nvme_subsys_class;
-	subsys->dev.release = nvme_release_subsystem;
-	subsys->dev.groups = nvme_subsys_attrs_groups;
-	dev_set_name(&subsys->dev, "nvme-subsys%d", subsys->instance);
-	device_initialize(&subsys->dev);
 
 	mutex_lock(&nvme_subsystems_lock);
 	found = __nvme_find_get_subsystem(subsys->subnqn);
@@ -3301,7 +3316,6 @@ static int nvme_init_subsystem(struct nvme_ctrl *ctrl, struct nvme_id_ctrl *id)
 			put_device(&subsys->dev);
 			goto out_unlock;
 		}
-		ida_init(&subsys->ns_ida);
 		list_add_tail(&subsys->entry, &nvme_subsystems);
 	}
 
