@@ -589,8 +589,6 @@ static ssize_t nvme_ctrl_dhchap_secret_store(struct device *dev,
 		return -EINVAL;
 	if (count < 7)
 		return -EINVAL;
-	if (memcmp(buf, "DHHC-1:", 7))
-		return -EINVAL;
 
 	dhchap_secret = kzalloc(count + 1, GFP_KERNEL);
 	if (!dhchap_secret)
@@ -598,13 +596,12 @@ static ssize_t nvme_ctrl_dhchap_secret_store(struct device *dev,
 	memcpy(dhchap_secret, buf, count);
 	nvme_auth_stop(ctrl);
 	if (strcmp(dhchap_secret, opts->dhchap_secret)) {
-		struct nvme_dhchap_key *key, *host_key;
-		int ret;
+		struct key *key, *host_key;
 
-		ret = nvme_auth_generate_key(dhchap_secret, &key);
-		if (ret) {
+		key = nvme_auth_extract_key(opts->keyring, dhchap_secret, count);
+		if (IS_ERR(key)) {
 			kfree(dhchap_secret);
-			return ret;
+			return PTR_ERR(key);
 		}
 		kfree(opts->dhchap_secret);
 		opts->dhchap_secret = dhchap_secret;
@@ -612,7 +609,7 @@ static ssize_t nvme_ctrl_dhchap_secret_store(struct device *dev,
 		mutex_lock(&ctrl->dhchap_auth_mutex);
 		ctrl->host_key = key;
 		mutex_unlock(&ctrl->dhchap_auth_mutex);
-		nvme_auth_free_key(host_key);
+		key_put(host_key);
 	} else
 		kfree(dhchap_secret);
 	/* Start re-authentication */
@@ -656,13 +653,13 @@ static ssize_t nvme_ctrl_dhchap_ctrl_secret_store(struct device *dev,
 	memcpy(dhchap_secret, buf, count);
 	nvme_auth_stop(ctrl);
 	if (strcmp(dhchap_secret, opts->dhchap_ctrl_secret)) {
-		struct nvme_dhchap_key *key, *ctrl_key;
-		int ret;
+		struct key *key, *ctrl_key;
 
-		ret = nvme_auth_generate_key(dhchap_secret, &key);
-		if (ret) {
+		key = nvme_auth_extract_key(opts->keyring,
+					    dhchap_secret, count);
+		if (IS_ERR(key)) {
 			kfree(dhchap_secret);
-			return ret;
+			return PTR_ERR(key);
 		}
 		kfree(opts->dhchap_ctrl_secret);
 		opts->dhchap_ctrl_secret = dhchap_secret;
@@ -670,7 +667,7 @@ static ssize_t nvme_ctrl_dhchap_ctrl_secret_store(struct device *dev,
 		mutex_lock(&ctrl->dhchap_auth_mutex);
 		ctrl->ctrl_key = key;
 		mutex_unlock(&ctrl->dhchap_auth_mutex);
-		nvme_auth_free_key(ctrl_key);
+		key_put(ctrl_key);
 	} else
 		kfree(dhchap_secret);
 	/* Start re-authentication */

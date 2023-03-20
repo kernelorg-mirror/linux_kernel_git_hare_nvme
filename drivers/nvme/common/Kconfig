@@ -13,3 +13,4 @@ config NVME_AUTH
 	select CRYPTO_DH
 	select CRYPTO_DH_RFC7919_GROUPS
 	select CRYPTO_HKDF
+	select NVME_KEYRING
