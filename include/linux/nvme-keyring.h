@@ -18,9 +18,14 @@ key_serial_t nvme_tls_psk_default(struct key *keyring,
 
 key_serial_t nvme_keyring_id(void);
 struct key *nvme_tls_key_lookup(key_serial_t key_id);
+
+struct key *nvme_dhchap_psk_refresh(struct key *keyring,
+		const u8 *data, size_t data_len);
+struct key *nvme_dhchap_psk_lookup(struct key *keyring, const char *identity);
+u8 nvme_dhchap_psk_hash(struct key *key);
+
 #else
 static inline struct key *nvme_tls_psk_refresh(struct key *keyring,
-		const char *hostnqn, char *subnqn, u8 hmac_id,
 		u8 *data, size_t data_len, const char *digest)
 {
 	return ERR_PTR(-ENOTSUPP);
@@ -37,6 +42,21 @@ static inline key_serial_t nvme_keyring_id(void)
 static inline struct key *nvme_tls_key_lookup(key_serial_t key_id)
 {
 	return ERR_PTR(-ENOTSUPP);
+}
+static inline struct key *nvme_dhchap_psk_refresh(struct key *keyring,
+		const char *hostnqn, const char *subnqn,
+		u8 *data, size_t data_len)
+{
+	return ERR_PTR(-ENOTSUPP);
+}
+static inline struct key *nvme_dhchap_psk_lookup(struct key *keyring,
+		const char *hostnqn, const char *subnqn, u8 hmac);
+{
+	return ERR_PTR(-ENOTSUPP);
+}
+u8 nvme_dhchap_psk_hash(struct key *key)
+{
+	return 0;
 }
 #endif /* !CONFIG_NVME_KEYRING */
 #endif /* _NVME_KEYRING_H */
