@@ -1285,12 +1285,12 @@ done:
 
 static void nvmet_tcp_schedule_release_queue(struct nvmet_tcp_queue *queue)
 {
-	spin_lock(&queue->state_lock);
+	spin_lock_bh(&queue->state_lock);
 	if (queue->state != NVMET_TCP_Q_DISCONNECTING) {
 		queue->state = NVMET_TCP_Q_DISCONNECTING;
 		queue_work(nvmet_wq, &queue->release_work);
 	}
-	spin_unlock(&queue->state_lock);
+	spin_unlock_bh(&queue->state_lock);
 }
 
 static inline void nvmet_tcp_arm_queue_deadline(struct nvmet_tcp_queue *queue)
