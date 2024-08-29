@@ -2094,6 +2094,48 @@ static void nvme_set_chunk_sectors(struct nvme_ns *ns, struct nvme_id_ns *id,
 	lim->chunk_sectors = iob;
 }
 
+/*
+ * The queue_limits structure mixes values that are the hardware limitations for
+ * bio splitting with what is the device configuration.
+ *
+ * For NVMe the device configuration can change after e.g. a Format command, and
+ * we really want to pick up the new format value here.  But we must still stack
+ * the queue limits to the least common denominator for multipathing to split
+ * the bios properly.
+ *
+ * To work around this, we explicitly set the device configuration to the values
+ * that we just queried, but stack the splitting limits in to make sure we still
+ * obey possibly lower limitations of other controllers.
+ */
+static int nvme_update_ns_info_mpath(struct nvme_ns *ns,
+		struct nvme_ns_info *info, bool unsupported)
+{
+	struct queue_limits *ns_lim = &ns->disk->queue->limits;
+	struct gendisk *disk = ns->head->disk;
+	struct queue_limits lim;
+	int ret;
+
+	blk_mq_freeze_queue(disk->queue);
+	lim = queue_limits_start_update(disk->queue);
+	lim.logical_block_size = ns_lim->logical_block_size;
+	lim.physical_block_size = ns_lim->physical_block_size;
+	lim.io_min = ns_lim->io_min;
+	lim.io_opt = ns_lim->io_opt;
+	queue_limits_stack_bdev(&lim, ns->disk->part0, 0, disk->disk_name);
+	if (unsupported)
+		disk->flags |= GENHD_FL_HIDDEN;
+	else
+		nvme_init_integrity(ns->head, &lim, info);
+	ret = queue_limits_commit_update(disk->queue, &lim);
+
+	set_capacity_and_notify(disk, get_capacity(ns->disk));
+	set_disk_ro(disk, nvme_ns_is_readonly(ns, info));
+	nvme_mpath_revalidate_paths(ns);
+	blk_mq_unfreeze_queue(disk->queue);
+
+	return ret;
+}
+
 static int nvme_update_ns_info_generic(struct nvme_ns *ns,
 		struct nvme_ns_info *info)
 {
@@ -2250,46 +2292,8 @@ static int nvme_update_ns_info(struct nvme_ns *ns, struct nvme_ns_info *info)
 		ret = 0;
 	}
 
-	if (!ret && nvme_ns_head_multipath(ns->head)) {
-		struct queue_limits *ns_lim = &ns->disk->queue->limits;
-		struct queue_limits lim;
-
-		blk_mq_freeze_queue(ns->head->disk->queue);
-		/*
-		 * queue_limits mixes values that are the hardware limitations
-		 * for bio splitting with what is the device configuration.
-		 *
-		 * For NVMe the device configuration can change after e.g. a
-		 * Format command, and we really want to pick up the new format
-		 * value here.  But we must still stack the queue limits to the
-		 * least common denominator for multipathing to split the bios
-		 * properly.
-		 *
-		 * To work around this, we explicitly set the device
-		 * configuration to those that we just queried, but only stack
-		 * the splitting limits in to make sure we still obey possibly
-		 * lower limitations of other controllers.
-		 */
-		lim = queue_limits_start_update(ns->head->disk->queue);
-		lim.logical_block_size = ns_lim->logical_block_size;
-		lim.physical_block_size = ns_lim->physical_block_size;
-		lim.io_min = ns_lim->io_min;
-		lim.io_opt = ns_lim->io_opt;
-		queue_limits_stack_bdev(&lim, ns->disk->part0, 0,
-					ns->head->disk->disk_name);
-		if (unsupported)
-			ns->head->disk->flags |= GENHD_FL_HIDDEN;
-		else
-			nvme_init_integrity(ns->head, &lim, info);
-		ret = queue_limits_commit_update(ns->head->disk->queue, &lim);
-
-		set_capacity_and_notify(ns->head->disk, get_capacity(ns->disk));
-		set_disk_ro(ns->head->disk, nvme_ns_is_readonly(ns, info));
-		nvme_mpath_revalidate_paths(ns);
-
-		blk_mq_unfreeze_queue(ns->head->disk->queue);
-	}
-
+	if (nvme_ns_head_multipath(ns->head) && !ret)
+		ret = nvme_update_ns_info_mpath(ns, info, unsupported);
 	return ret;
 }
 
