@@ -24,7 +24,8 @@
 
 /**
  * hkdf_extract - HKDF-Extract (RFC 5869 section 2.2)
- * @hmac_tfm: hash context
+ * @hmac_tfm: an HMAC transform using the hash function desired for HKDF.  The
+ *            caller is responsible for setting the @prk afterwards.
  * @ikm: input keying material
  * @ikmlen: length of @ikm
  * @salt: input salt value
@@ -34,11 +35,11 @@
  * Extracts a pseudorandom key @prk from the input keying material
  * @ikm with length @ikmlen and salt @salt with length @saltlen.
  * The length of @prk is given by the digest size of @hmac_tfm.
- * For an 'unsalted' version of HKDF-Extract @salt should be set
- * to all zeroes and @saltlen should be set to the length of @prk.
+ * For an 'unsalted' version of HKDF-Extract @salt must be set
+ * to all zeroes and @saltlen must be set to the length of @prk.
  *
  * Returns 0 on success with the pseudorandom key stored in @prk,
- * otherwise a negative error.
+ * or a negative errno value otherwise.
  */
 int hkdf_extract(struct crypto_shash *hmac_tfm, const u8 *ikm,
 		 unsigned int ikmlen, const u8 *salt, unsigned int saltlen,
@@ -54,12 +55,13 @@ int hkdf_extract(struct crypto_shash *hmac_tfm, const u8 *ikm,
 }
 EXPORT_SYMBOL_GPL(hkdf_extract);
 
-/*
+/**
  * hkdf_expand - HKDF-Expand (RFC 5869 section 2.3)
  * @hmac_tfm: hash context keyed with pseudorandom key
  * @info: application-specific information
  * @infolen: length of @info
  * @okm: output keying material
+ * @okmlen: length of @okm
  *
  * This expands the pseudorandom key, which was already keyed into @hmac_tfm,
  * into @okmlen bytes of output keying material parameterized by the
@@ -67,7 +69,7 @@ EXPORT_SYMBOL_GPL(hkdf_extract);
  * This is thread-safe and may be called by multiple threads in parallel.
  *
  * Returns 0 on success with output keying material stored in @okm,
- * negative error number otherwise.
+ * or a negative errno value otherwise.
  */
 int hkdf_expand(struct crypto_shash *hmac_tfm,
 		const u8 *info, unsigned int infolen,
@@ -78,19 +80,17 @@ int hkdf_expand(struct crypto_shash *hmac_tfm,
 	int err;
 	const u8 *prev = NULL;
 	u8 counter = 1;
-	u8 *tmp;
+	u8 tmp[HASH_MAX_DIGESTSIZE];
 
-	if (WARN_ON(okmlen > 255 * hashlen))
+	if (WARN_ON(okmlen > 255 * hashlen ||
+		    hashlen > HASH_MAX_DIGESTSIZE))
 		return -EINVAL;
 
-	tmp = kzalloc(hashlen, GFP_KERNEL);
-	if (!tmp)
-		return -ENOMEM;
+	memzero_explicit(tmp, HASH_MAX_DIGESTSIZE);
 
 	desc->tfm = hmac_tfm;
 
 	for (i = 0; i < okmlen; i += hashlen) {
-
 		err = crypto_shash_init(desc);
 		if (err)
 			goto out;
@@ -101,7 +101,7 @@ int hkdf_expand(struct crypto_shash *hmac_tfm,
 				goto out;
 		}
 
-		if (info && infolen) {
+		if (infolen) {
 			err = crypto_shash_update(desc, info, infolen);
 			if (err)
 				goto out;
@@ -127,23 +127,23 @@ out:
 	if (unlikely(err))
 		memzero_explicit(okm, okmlen); /* so caller doesn't need to */
 	shash_desc_zero(desc);
-	kfree(tmp);
+	memzero_explicit(tmp, HASH_MAX_DIGESTSIZE);
 	return err;
 }
 EXPORT_SYMBOL_GPL(hkdf_expand);
 
 struct hkdf_testvec {
 	const char *test;
-	const unsigned char *ikm;
-	const unsigned char *salt;
-	const unsigned char *info;
-	const unsigned char *prk;
-	const unsigned char *okm;
-	unsigned short ikm_size;
-	unsigned short salt_size;
-	unsigned short info_size;
-	unsigned short prk_size;
-	unsigned short okm_size;
+	const u8 *ikm;
+	const u8 *salt;
+	const u8 *info;
+	const u8 *prk;
+	const u8 *okm;
+	u16 ikm_size;
+	u16 salt_size;
+	u16 info_size;
+	u16 prk_size;
+	u16 okm_size;
 };
 
 /*
@@ -316,14 +316,14 @@ static int hkdf_test(const char *shash, const struct hkdf_testvec *tv)
 	prk = kzalloc(prk_size, GFP_KERNEL);
 	if (!prk) {
 		err = -ENOMEM;
-		goto out_free_shash;
+		goto out_free;
 	}
 
 	if (tv->prk_size != prk_size) {
 		pr_err("%s(%s): prk size mismatch (vec %u, digest %u\n",
 		       tv->test, driver, tv->prk_size, prk_size);
 		err = -EINVAL;
-		goto out_free_prk;
+		goto out_free;
 	}
 
 	err = hkdf_extract(tfm, tv->ikm, tv->ikm_size,
@@ -331,27 +331,27 @@ static int hkdf_test(const char *shash, const struct hkdf_testvec *tv)
 	if (err) {
 		pr_err("%s(%s): hkdf_extract failed with %d\n",
 		       tv->test, driver, err);
-		goto out_free_prk;
+		goto out_free;
 	}
 
 	if (memcmp(prk, tv->prk, tv->prk_size)) {
 		pr_err("%s(%s): hkdf_extract prk mismatch\n",
 		       tv->test, driver);
 		err = -EINVAL;
-		goto out_free_prk;
+		goto out_free;
 	}
 
 	okm = kzalloc(tv->okm_size, GFP_KERNEL);
 	if (!okm) {
 		err = -ENOMEM;
-		goto out_free_prk;
+		goto out_free;
 	}
 
 	err = crypto_shash_setkey(tfm, tv->prk, tv->prk_size);
 	if (err) {
-		pr_err("%s(%s): failed to hash key to PRK, error %d\n",
+		pr_err("%s(%s): failed to set prk, error %d\n",
 		       tv->test, driver, err);
-		goto out_free_okm;
+		goto out_free;
 	}
 
 	err = hkdf_expand(tfm, tv->info, tv->info_size,
@@ -365,11 +365,9 @@ static int hkdf_test(const char *shash, const struct hkdf_testvec *tv)
 		print_hex_dump(KERN_ERR, "okm: ", DUMP_PREFIX_NONE, 16, 1, okm, tv->okm_size, false);
 		err = -EINVAL;
 	}
-out_free_okm:
+out_free:
 	kfree(okm);
-out_free_prk:
 	kfree(prk);
-out_free_shash:
 	crypto_free_shash(tfm);
 	return err;
 }
@@ -400,5 +398,5 @@ module_init(crypto_hkdf_module_init);
 module_exit(crypto_hkdf_module_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Hashed-Key derivation functions");
+MODULE_DESCRIPTION("HMAC-based Key Derivation Function (HKDF)");
 MODULE_ALIAS_CRYPTO("hkdf");

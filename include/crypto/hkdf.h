@@ -9,26 +9,10 @@
 #ifndef _CRYPTO_HKDF_H
 #define _CRYPTO_HKDF_H
 
-#ifdef CONFIG_CRYPTO_HKDF
 int hkdf_extract(struct crypto_shash *hmac_tfm, const u8 *ikm,
 		 unsigned int ikmlen, const u8 *salt, unsigned int saltlen,
 		 u8 *prk);
 int hkdf_expand(struct crypto_shash *hmac_tfm,
 		const u8 *info, unsigned int infolen,
 		u8 *okm, unsigned int okmlen);
-#else
-static inline int hkdf_extract(struct crypto_shash *hmac_tfm,
-			       const u8 *ikm, unsigned int ikmlen,
-			       const u8 *salt, unsigned int saltlen,
-			       u8 *prk)
-{
-	return -ENOTSUP;
-}
-static inline int hkdf_expand(struct crypto_shash *hmac_tfm,
-			      const u8 *info, unsigned int infolen,
-			      u8 *okm, unsigned int okmlen)
-{
-	return -ENOTSUP;
-}
-#endif
 #endif

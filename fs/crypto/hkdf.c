@@ -63,6 +63,11 @@ int fscrypt_init_hkdf(struct fscrypt_hkdf *hkdf, const u8 *master_key,
 		return PTR_ERR(hmac_tfm);
 	}
 
+	if (WARN_ON_ONCE(crypto_shash_digestsize(hmac_tfm) != sizeof(prk))) {
+		err = -EINVAL;
+		goto err_free_tfm;
+	}
+
 	err = hkdf_extract(hmac_tfm, master_key, master_key_size,
 			   default_salt, HKDF_HASHLEN, prk);
 	if (err)
@@ -101,9 +106,6 @@ int fscrypt_hkdf_expand(const struct fscrypt_hkdf *hkdf, u8 context,
 	u8 *full_info;
 	int err;
 
-	if (WARN_ON_ONCE(okmlen > 255 * HKDF_HASHLEN))
-		return -EINVAL;
-
 	full_info = kzalloc(infolen + 9, GFP_KERNEL);
 	if (!full_info)
 		return -ENOMEM;
@@ -113,7 +115,7 @@ int fscrypt_hkdf_expand(const struct fscrypt_hkdf *hkdf, u8 context,
 	full_info[8] = context;
 	memcpy(full_info + 9, info, infolen);
 
-	err = hkdf_expand(hkdf->hmac_tfm, full_info, infolen + 8,
+	err = hkdf_expand(hkdf->hmac_tfm, full_info, infolen + 9,
 			  okm, okmlen);
 	kfree_sensitive(full_info);
 	return err;
