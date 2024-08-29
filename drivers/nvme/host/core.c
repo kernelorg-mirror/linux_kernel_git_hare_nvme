@@ -2146,12 +2146,18 @@ static int nvme_update_ns_info_generic(struct nvme_ns *ns,
 	lim = queue_limits_start_update(ns->disk->queue);
 	nvme_set_ctrl_limits(ns->ctrl, &lim);
 	ret = queue_limits_commit_update(ns->disk->queue, &lim);
-	set_disk_ro(ns->disk, nvme_ns_is_readonly(ns, info));
-	blk_mq_unfreeze_queue(ns->disk->queue);
+	if (ret)
+		goto out_unfreeze;
 
 	/* Hide the block-interface for these devices */
-	if (!ret)
-		ret = -ENODEV;
+	ns->disk->flags |= GENHD_FL_HIDDEN;
+	set_bit(NVME_NS_READY, &ns->flags);
+	set_disk_ro(ns->disk, nvme_ns_is_readonly(ns, info));
+
+out_unfreeze:
+	blk_mq_unfreeze_queue(ns->disk->queue);
+	if (nvme_ns_head_multipath(ns->head) && !ret)
+		ret = nvme_update_ns_info_mpath(ns, info, true);
 	return ret;
 }
 
@@ -2162,6 +2168,7 @@ static int nvme_update_ns_info_block(struct nvme_ns *ns,
 	struct nvme_id_ns_nvm *nvm = NULL;
 	struct nvme_zone_info zi = {};
 	struct nvme_id_ns *id;
+	bool unsupported = false;
 	sector_t capacity;
 	unsigned lbaf;
 	int ret;
@@ -2187,6 +2194,11 @@ static int nvme_update_ns_info_block(struct nvme_ns *ns,
 	if (IS_ENABLED(CONFIG_BLK_DEV_ZONED) &&
 	    ns->head->ids.csi == NVME_CSI_ZNS) {
 		ret = nvme_query_zone_info(ns, lbaf, &zi);
+		if (ret == -ENODEV) {
+			unsupported = true;
+			ns->disk->flags |= GENHD_FL_HIDDEN;
+			goto done;
+		}
 		if (ret < 0)
 			goto out;
 	}
@@ -2237,6 +2249,8 @@ static int nvme_update_ns_info_block(struct nvme_ns *ns,
 	 */
 	if ((id->dlfeat & 0x7) == 0x1 && (id->dlfeat & (1 << 3)))
 		ns->head->features |= NVME_NS_DEAC;
+
+done:
 	set_disk_ro(ns->disk, nvme_ns_is_readonly(ns, info));
 	set_bit(NVME_NS_READY, &ns->flags);
 	blk_mq_unfreeze_queue(ns->disk->queue);
@@ -2251,50 +2265,31 @@ static int nvme_update_ns_info_block(struct nvme_ns *ns,
 out:
 	kfree(nvm);
 	kfree(id);
+
+	if (nvme_ns_head_multipath(ns->head) && !ret)
+		ret = nvme_update_ns_info_mpath(ns, info, unsupported);
 	return ret;
 }
 
 static int nvme_update_ns_info(struct nvme_ns *ns, struct nvme_ns_info *info)
 {
-	bool unsupported = false;
-	int ret;
-
 	switch (info->ids.csi) {
 	case NVME_CSI_ZNS:
 		if (!IS_ENABLED(CONFIG_BLK_DEV_ZONED)) {
 			dev_info(ns->ctrl->device,
 	"block device for nsid %u not supported without CONFIG_BLK_DEV_ZONED\n",
 				info->nsid);
-			ret = nvme_update_ns_info_generic(ns, info);
-			break;
+			return nvme_update_ns_info_generic(ns, info);
 		}
-		ret = nvme_update_ns_info_block(ns, info);
-		break;
+		return nvme_update_ns_info_block(ns, info);
 	case NVME_CSI_NVM:
-		ret = nvme_update_ns_info_block(ns, info);
-		break;
+		return nvme_update_ns_info_block(ns, info);
 	default:
 		dev_info(ns->ctrl->device,
 			"block device for nsid %u not supported (csi %u)\n",
 			info->nsid, info->ids.csi);
-		ret = nvme_update_ns_info_generic(ns, info);
-		break;
+		return nvme_update_ns_info_generic(ns, info);
 	}
-
-	/*
-	 * If probing fails due an unsupported feature, hide the block device,
-	 * but still allow other access.
-	 */
-	if (ret == -ENODEV) {
-		ns->disk->flags |= GENHD_FL_HIDDEN;
-		set_bit(NVME_NS_READY, &ns->flags);
-		unsupported = true;
-		ret = 0;
-	}
-
-	if (nvme_ns_head_multipath(ns->head) && !ret)
-		ret = nvme_update_ns_info_mpath(ns, info, unsupported);
-	return ret;
 }
 
 int nvme_ns_get_unique_id(struct nvme_ns *ns, u8 id[16],
