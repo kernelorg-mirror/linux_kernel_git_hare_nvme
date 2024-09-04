@@ -470,6 +470,7 @@ struct nvme_ns_head {
 	struct list_head	entry;
 	struct kref		ref;
 	bool			shared;
+	bool			unique_nsid;
 	bool			passthru_err_log_enabled;
 	struct nvme_effects_log *effects;
 	u64			nuse;
@@ -852,11 +853,9 @@ static inline bool nvme_check_ready(struct nvme_ctrl *ctrl, struct request *rq,
  *
  * In other case, private namespace are not required to report a unique NSID.
  */
-static inline bool nvme_is_unique_nsid(struct nvme_ctrl *ctrl,
-		struct nvme_ns_head *head)
+static inline bool nvme_ctrl_is_unique_nsid(struct nvme_ctrl *ctrl)
 {
-	return head->shared ||
-		(ctrl->oacs & NVME_CTRL_OACS_NS_MNGT_SUPP) ||
+	return (ctrl->oacs & NVME_CTRL_OACS_NS_MNGT_SUPP) ||
 		(ctrl->subsys->cmic & NVME_CTRL_CMIC_ANA) ||
 		(ctrl->ctratt & NVME_CTRL_CTRATT_NVM_SETS);
 }

@@ -612,7 +612,7 @@ int nvme_mpath_alloc_disk(struct nvme_ctrl *ctrl, struct nvme_ns_head *head)
 	 * could change after a rescan.
 	 */
 	if (!(ctrl->subsys->cmic & NVME_CTRL_CMIC_MULTI_CTRL) ||
-	    !nvme_is_unique_nsid(ctrl, head) || !multipath)
+	    !head->unique_nsid || !multipath)
 		return 0;
 
 	blk_set_stacking_limits(&lim);
