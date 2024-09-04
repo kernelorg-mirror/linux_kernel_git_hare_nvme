@@ -724,7 +724,7 @@ int nvme_mpath_alloc_disk(struct nvme_ctrl *ctrl, struct nvme_ns_head *head)
 			return 0;
 	}
 
-	if (!nvme_is_unique_nsid(ctrl, head))
+	if (!head->unique_nsid)
 		return 0;
 
 	blk_set_stacking_limits(&lim);

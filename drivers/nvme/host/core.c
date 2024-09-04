@@ -3818,7 +3818,7 @@ static struct nvme_ns_head *nvme_find_ns_head(struct nvme_ctrl *ctrl,
 		 * In that case we can't use the same ns_head for namespaces
 		 * with the same NSID.
 		 */
-		if (h->ns_id != nsid || !nvme_is_unique_nsid(ctrl, h))
+		if (h->ns_id != nsid || !h->unique_nsid)
 			continue;
 		if (nvme_tryget_ns_head(h))
 			return h;
@@ -3945,6 +3945,7 @@ static struct nvme_ns_head *nvme_alloc_ns_head(struct nvme_ctrl *ctrl,
 	head->ids = info->ids;
 	head->shared = info->is_shared;
 	head->rotational = info->is_rotational;
+	head->unique_nsid = head->shared || nvme_ctrl_is_unique_nsid(ctrl);
 	ratelimit_state_init(&head->rs_nuse, 5 * HZ, 1);
 	ratelimit_set_flags(&head->rs_nuse, RATELIMIT_MSG_ON_RELEASE);
 	kref_init(&head->ref);
