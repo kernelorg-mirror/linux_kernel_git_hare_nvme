@@ -733,9 +733,12 @@ static void nvme_update_ns_ana_state(struct nvme_ana_group_desc *desc,
 	 * will reprocess the ANA log page in nvme_mpath_update() once the
 	 * controller is ready.
 	 */
-	if (nvme_state_is_live(ns->ana_state) &&
-	    nvme_ctrl_state(ns->ctrl) == NVME_CTRL_LIVE)
-		nvme_mpath_set_live(ns);
+	if (nvme_ctrl_state(ns->ctrl) == NVME_CTRL_LIVE) {
+		if (nvme_state_is_live(ns->ana_state))
+			nvme_mpath_set_live(ns);
+		else
+			kblockd_schedule_work(&head->requeue_work);
+	}
 }
 
 static int nvme_update_ana_state(struct nvme_ctrl *ctrl,
