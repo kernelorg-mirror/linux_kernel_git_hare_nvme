@@ -209,7 +209,7 @@ static const u8 __initconst ctext0[16] =
 	"\x58\xe2\xfc\xce\xfa\x7e\x30\x61"
 	"\x36\x7f\x1d\x57\xa4\xe7\x45\x5a";
 
-static const u8 __initconst ptext1[16];
+static const u8 __initconst ptext1[16] = { 0 };
 
 static const u8 __initconst ctext1[32] =
 	"\x03\x88\xda\xce\x60\xb6\xa3\x92"
