@@ -242,7 +242,7 @@ int nvme_auth_transform_key(struct nvme_dhchap_key *key, char *nqn,
 {
 	const char *hmac_name;
 	struct crypto_shash *key_tfm;
-	struct shash_desc *shash;
+	SHASH_DESC_ON_STACK(shash, key_tfm);
 	u8 *transformed_data;
 	u8 *key_data;
 	size_t transformed_len;
@@ -287,39 +287,28 @@ int nvme_auth_transform_key(struct nvme_dhchap_key *key, char *nqn,
 		goto out_free_tfm;
 	}
 
-	shash = kmalloc(sizeof(struct shash_desc) +
-			crypto_shash_descsize(key_tfm),
-			GFP_KERNEL);
-	if (!shash) {
-		ret = -ENOMEM;
-		goto out_free_transformed_data;
-	}
-
 	shash->tfm = key_tfm;
 	ret = crypto_shash_setkey(key_tfm, key->key, key->len);
 	if (ret < 0)
-		goto out_free_shash;
+		goto out_free_transformed_data;
 	ret = crypto_shash_init(shash);
 	if (ret < 0)
-		goto out_free_shash;
+		goto out_free_transformed_data;
 	ret = crypto_shash_update(shash, nqn, strlen(nqn));
 	if (ret < 0)
-		goto out_free_shash;
+		goto out_free_transformed_data;
 	ret = crypto_shash_update(shash, "NVMe-over-Fabrics", 17);
 	if (ret < 0)
-		goto out_free_shash;
+		goto out_free_transformed_data;
 	ret = crypto_shash_final(shash, transformed_data);
 	if (ret < 0)
-		goto out_free_shash;
+		goto out_free_transformed_data;
 
-	kfree(shash);
 	crypto_free_shash(key_tfm);
 	*transformed_secret = transformed_data;
 
 	return transformed_len;
 
-out_free_shash:
-	kfree(shash);
 out_free_transformed_data:
 	kfree(transformed_data);
 out_free_tfm:
