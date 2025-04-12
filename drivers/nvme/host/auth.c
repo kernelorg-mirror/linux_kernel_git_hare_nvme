@@ -24,8 +24,6 @@ struct nvme_dhchap_queue_context {
 	struct nvme_ctrl *ctrl;
 	struct crypto_shash *shash_tfm;
 	struct crypto_kpp *dh_tfm;
-	u8 *transformed_secret;
-	size_t transformed_len;
 	void *buf;
 	int qid;
 	int error;
@@ -431,28 +429,25 @@ static int nvme_auth_dhchap_setup_host_response(struct nvme_ctrl *ctrl,
 		struct nvme_dhchap_queue_context *chap)
 {
 	SHASH_DESC_ON_STACK(shash, chap->shash_tfm);
+	u8 *transformed_secret;
+	size_t transformed_len;
 	u8 buf[4], *challenge = chap->c1;
 	int ret;
 
 	dev_dbg(ctrl->device, "%s: qid %d host response seq %u transaction %d\n",
 		__func__, chap->qid, chap->s1, chap->transaction);
 
-	if (!chap->transformed_secret) {
-		ret = nvme_auth_transform_key(ctrl->host_key,
-					      ctrl->opts->host->nqn,
-					      &chap->transformed_secret);
-		if (ret < 0)
-			return ret;
-		chap->transformed_len = ret;
-	} else {
-		dev_dbg(ctrl->device, "%s: qid %d re-using host response\n",
-			__func__, chap->qid);
-	}
+	ret = nvme_auth_transform_key(ctrl->host_key,
+				      ctrl->opts->host->nqn,
+				      &transformed_secret);
+	if (ret < 0)
+		return ret;
+	transformed_len = ret;
 
 	ret = crypto_shash_setkey(chap->shash_tfm,
-			chap->transformed_secret, chap->transformed_len);
+			transformed_secret, transformed_len);
 	if (ret) {
-		dev_warn(ctrl->device, "qid %d: failed to set key, error %d\n",
+		dev_warn(ctrl->device, "qid %d: failed to set host key, error %d\n",
 			 chap->qid, ret);
 		goto out;
 	}
@@ -509,6 +504,7 @@ static int nvme_auth_dhchap_setup_host_response(struct nvme_ctrl *ctrl,
 out:
 	if (challenge != chap->c1)
 		kfree(challenge);
+	kfree(transformed_secret);
 	return ret;
 }
 
@@ -657,9 +653,6 @@ gen_sesskey:
 
 static void nvme_auth_reset_dhchap(struct nvme_dhchap_queue_context *chap)
 {
-	kfree(chap->transformed_secret);
-	chap->transformed_secret = NULL;
-	chap->transformed_len = 0;
 	kfree_sensitive(chap->host_key);
 	chap->host_key = NULL;
 	chap->host_key_len = 0;
