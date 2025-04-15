@@ -23,23 +23,34 @@
 void nvmet_auth_revoke_key(struct nvmet_host *host, bool set_ctrl)
 {
 	struct key *key = ERR_PTR(-ENOKEY);
+	bool generated = false;
 
 	if (set_ctrl) {
 		if (host->dhchap_ctrl_key) {
 			key = host->dhchap_ctrl_key;
+			generated = host->dhchap_ctrl_key_generated;
 			host->dhchap_ctrl_key = NULL;
+			host->dhchap_ctrl_key_generated = false;
 		}
 	} else {
 		if (host->dhchap_key) {
 			key = host->dhchap_key;
+			generated = host->dhchap_key_generated;
 			host->dhchap_key = NULL;
+			host->dhchap_key_generated = false;
 		}
 	}
 	if (!IS_ERR(key)) {
-		pr_debug("%s: revoke %s key %08x\n",
+		if (generated) {
+			pr_debug("%s: revoke %s key %08x\n",
+				 __func__, set_ctrl ? "ctrl" : "host",
+				 key_serial(key));
+			key_revoke(key);
+			synchronize_rcu();
+		}
+		pr_debug("%s: drop %s key %08x\n",
 			 __func__, set_ctrl ? "ctrl" : "host",
 			 key_serial(key));
-		key_revoke(key);
 		key_put(key);
 	}
 }
@@ -48,6 +59,7 @@ int nvmet_auth_set_key(struct nvmet_host *host, const char *secret,
 		       bool set_ctrl)
 {
 	unsigned char key_hash;
+	bool generated = false;
 	struct key *key;
 	size_t len;
 
@@ -57,7 +69,7 @@ int nvmet_auth_set_key(struct nvmet_host *host, const char *secret,
 	}
 
 	len = strcspn(secret, "\n");
-	key = nvme_auth_extract_key(NULL, secret, len);
+	key = nvme_auth_extract_key(NULL, secret, len, &generated);
 	if (IS_ERR(key)) {
 		pr_debug("%s: invalid key specification\n", __func__);
 		return PTR_ERR(key);
@@ -87,8 +99,10 @@ int nvmet_auth_set_key(struct nvmet_host *host, const char *secret,
 	nvmet_auth_revoke_key(host, set_ctrl);
 	if (set_ctrl) {
 		host->dhchap_ctrl_key = key;
+		host->dhchap_ctrl_key_generated = generated;
 	} else {
 		host->dhchap_key = key;
+		host->dhchap_key_generated = generated;
 	}
 	return 0;
 }

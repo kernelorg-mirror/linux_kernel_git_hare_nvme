@@ -1037,19 +1037,29 @@ static void nvme_ctrl_auth_work(struct work_struct *work)
 static void nvme_auth_clear_key(struct nvme_ctrl *ctrl, bool is_ctrl)
 {
 	struct key *key;
+	bool generated;
 
 	if (is_ctrl) {
 		key = ctrl->ctrl_key;
 		ctrl->ctrl_key = NULL;
+		generated = ctrl->ctrl_key_generated;
+		ctrl->ctrl_key_generated = false;
 	} else {
 		key = ctrl->host_key;
 		ctrl->host_key = NULL;
+		generated = ctrl->host_key_generated;
+		ctrl->host_key_generated = false;
 	}
 	if (key) {
-		dev_dbg(ctrl->device, "%s: revoke%s key %08x\n",
+		if (generated) {
+			dev_dbg(ctrl->device, "%s: revoke%s key %08x\n",
+				__func__, is_ctrl ? " ctrl" : "",
+				key_serial(key));
+			key_revoke(key);
+		}
+		dev_dbg(ctrl->device, "%s: drop%s key %08x\n",
 			__func__, is_ctrl ? " ctrl" : "",
 			key_serial(key));
-		key_revoke(key);
 		key_put(key);
 	}
 }
@@ -1079,6 +1089,8 @@ int nvme_auth_init_ctrl(struct nvme_ctrl *ctrl)
 			 key_serial(ctrl->opts->dhchap_key));
 		return -ENOKEY;
 	}
+	/* Key has been generated during option parsing */
+	ctrl->host_key_generated = false;
 	down_read(&ctrl->host_key->sem);
 	ret = key_validate(ctrl->host_key);
 	up_read(&ctrl->host_key->sem);
@@ -1105,6 +1117,7 @@ int nvme_auth_init_ctrl(struct nvme_ctrl *ctrl)
 				 key_serial(ctrl->opts->dhchap_ctrl_key));
 			return -ENOKEY;
 		}
+		ctrl->ctrl_key_generated = false;
 		down_read(&ctrl->ctrl_key->sem);
 		ret = key_validate(ctrl->ctrl_key);
 		up_read(&ctrl->ctrl_key->sem);
