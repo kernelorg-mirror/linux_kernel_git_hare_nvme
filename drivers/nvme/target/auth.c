@@ -61,7 +61,7 @@ int nvmet_auth_set_key(struct nvmet_host *host, const char *secret,
 	unsigned char key_hash;
 	bool generated = false;
 	struct key *key;
-	size_t len;
+	size_t len, key_len;
 
 	if (!strlen(secret)) {
 		nvmet_auth_revoke_key(host, set_ctrl);
@@ -94,6 +94,19 @@ int nvmet_auth_set_key(struct nvmet_host *host, const char *secret,
 			key_put(key);
 			return -ENOTSUPP;
 		}
+	}
+	key_len = nvme_dhchap_psk_len(key);
+	switch (key_len) {
+	case 32:
+		if (host->dhchap_hash_id > 0)
+			host->dhchap_hash_id = 1;
+		break;
+	case 48:
+		if (host->dhchap_hash_id == 3)
+			host->dhchap_hash_id = 2;
+		break;
+	default:
+		break;
 	}
 	up_read(&key->sem);
 	nvmet_auth_revoke_key(host, set_ctrl);

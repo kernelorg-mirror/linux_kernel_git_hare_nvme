@@ -2216,6 +2216,17 @@ static ssize_t nvmet_host_dhchap_hash_store(struct config_item *item,
 		return -EINVAL;
 	if (!crypto_has_shash(nvme_auth_hmac_name(hmac_id), 0, 0))
 		return -ENOTSUPP;
+	if (host->dhchap_key) {
+		size_t key_len;
+
+		down_read(&host->dhchap_key->sem);
+		key_len = nvme_dhchap_psk_len(host->dhchap_key);
+		up_read(&host->dhchap_key->sem);
+		if (hmac_id == 3 && key_len < 64)
+			return -EINVAL;
+		if (hmac_id == 2 && key_len < 48)
+			return -EINVAL;
+	}
 	host->dhchap_hash_id = hmac_id;
 	return count;
 }
