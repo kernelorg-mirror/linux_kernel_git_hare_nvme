@@ -109,6 +109,27 @@ int nvmet_auth_set_key(struct nvmet_host *host, const char *secret,
 		break;
 	}
 	up_read(&key->sem);
+	/*
+	 * The protocol does not allow to have a different
+	 * key length for host and controller keys.
+	 */
+	if (set_ctrl && host->dhchap_key) {
+		size_t ctrl_key_len;
+
+		down_read(&host->dhchap_key->sem);
+		ctrl_key_len = nvme_dhchap_psk_len(host->dhchap_key);
+		up_read(&host->dhchap_key->sem);
+		if (ctrl_key_len < key_len)
+			return -EINVAL;
+	} else if (host->dhchap_ctrl_key) {
+		size_t host_key_len;
+
+		down_read(&host->dhchap_ctrl_key->sem);
+		host_key_len = nvme_dhchap_psk_len(host->dhchap_ctrl_key);
+		up_read(&host->dhchap_ctrl_key->sem);
+		if (host_key_len > key_len)
+			return -EINVAL;
+	}
 	nvmet_auth_revoke_key(host, set_ctrl);
 	if (set_ctrl) {
 		host->dhchap_ctrl_key = key;
