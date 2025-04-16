@@ -511,6 +511,17 @@ u8 nvme_dhchap_psk_hash(struct key *key)
 }
 EXPORT_SYMBOL_GPL(nvme_dhchap_psk_hash);
 
+size_t nvme_dhchap_psk_len(struct key *key)
+{
+	const struct user_key_payload *upayload;
+
+	if (!key)
+		return 0;
+	upayload = user_key_payload_locked(key);
+	return upayload->datalen;
+}
+EXPORT_SYMBOL_GPL(nvme_dhchap_psk_len);
+
 static int __init nvme_keyring_init(void)
 {
 	int err;

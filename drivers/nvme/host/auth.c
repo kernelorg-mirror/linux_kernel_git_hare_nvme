@@ -122,9 +122,19 @@ static int nvme_auth_set_dhchap_negotiate_data(struct nvme_ctrl *ctrl,
 {
 	struct nvmf_auth_dhchap_negotiate_data *data = chap->buf;
 	size_t size = sizeof(*data) + sizeof(union nvmf_auth_protocol);
+	size_t dhchap_key_len = 0;
 
 	if (size > CHAP_BUF_SIZE) {
 		chap->status = NVME_AUTH_DHCHAP_FAILURE_INCORRECT_PAYLOAD;
+		return -EINVAL;
+	}
+	if (ctrl->host_key) {
+		down_read(&ctrl->host_key->sem);
+		dhchap_key_len = nvme_dhchap_psk_len(ctrl->host_key);
+		up_read(&ctrl->host_key->sem);
+	}
+	if (!dhchap_key_len) {
+		chap->status = NVME_AUTH_DHCHAP_FAILURE_HASH_UNUSABLE;
 		return -EINVAL;
 	}
 	memset((u8 *)chap->buf, 0, size);
@@ -140,11 +150,23 @@ static int nvme_auth_set_dhchap_negotiate_data(struct nvme_ctrl *ctrl,
 		data->sc_c = NVME_AUTH_SECP_NOSC;
 	data->napd = 1;
 	data->auth_protocol[0].dhchap.authid = NVME_AUTH_DHCHAP_AUTH_ID;
-	data->auth_protocol[0].dhchap.halen = 3;
+	switch (dhchap_key_len) {
+	case 64:
+		data->auth_protocol[0].dhchap.halen = 3;
+		break;
+	case 48:
+		data->auth_protocol[0].dhchap.halen = 2;
+		break;
+	default:
+		data->auth_protocol[0].dhchap.halen = 1;
+		break;
+	}
 	data->auth_protocol[0].dhchap.dhlen = 6;
 	data->auth_protocol[0].dhchap.idlist[0] = NVME_AUTH_HASH_SHA256;
-	data->auth_protocol[0].dhchap.idlist[1] = NVME_AUTH_HASH_SHA384;
-	data->auth_protocol[0].dhchap.idlist[2] = NVME_AUTH_HASH_SHA512;
+	if (dhchap_key_len > 32)
+		data->auth_protocol[0].dhchap.idlist[1] = NVME_AUTH_HASH_SHA384;
+	if (dhchap_key_len > 48)
+		data->auth_protocol[0].dhchap.idlist[2] = NVME_AUTH_HASH_SHA512;
 	data->auth_protocol[0].dhchap.idlist[30] = NVME_AUTH_DHGROUP_NULL;
 	data->auth_protocol[0].dhchap.idlist[31] = NVME_AUTH_DHGROUP_2048;
 	data->auth_protocol[0].dhchap.idlist[32] = NVME_AUTH_DHGROUP_3072;

@@ -23,7 +23,7 @@ struct key *nvme_dhchap_psk_refresh(struct key *keyring,
 		const u8 *data, size_t data_len);
 struct key *nvme_dhchap_psk_lookup(struct key *keyring, const char *identity);
 u8 nvme_dhchap_psk_hash(struct key *key);
-
+size_t nvme_dhchap_psk_len(struct key *key);
 #else
 static inline struct key *nvme_tls_psk_refresh(struct key *keyring,
 		u8 *data, size_t data_len, const char *digest)
@@ -55,6 +55,10 @@ static inline struct key *nvme_dhchap_psk_lookup(struct key *keyring,
 	return ERR_PTR(-ENOTSUPP);
 }
 u8 nvme_dhchap_psk_hash(struct key *key)
+{
+	return 0;
+}
+size_t nvme_dhchap_psk_len(struct key *key)
 {
 	return 0;
 }
