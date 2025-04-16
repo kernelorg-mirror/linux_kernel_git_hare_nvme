@@ -725,6 +725,7 @@ static int nvmf_parse_options(struct nvmf_ctrl_options *opts,
 	uuid_t hostid;
 	char hostnqn[NVMF_NQN_SIZE];
 	struct key *key;
+	size_t host_key_len;
 
 	/* Set defaults */
 	opts->queue_size = NVMF_DEF_QUEUE_SIZE;
@@ -1103,10 +1104,16 @@ static int nvmf_parse_options(struct nvmf_ctrl_options *opts,
 			ret = PTR_ERR(key);
 			goto out;
 		}
-		pr_debug("using dhchap key %08x\n", key_serial(key));
+		down_read(&key->sem);
+		host_key_len = nvme_dhchap_psk_len(key);
+		up_read(&key->sem);
+		pr_debug("using dhchap key %08x (len %lu)\n",
+			 key_serial(key), host_key_len);
 		opts->dhchap_key = key;
 	}
 	if (ctrl_secret) {
+		size_t ctrl_key_len;
+
 		if (!opts->dhchap_key) {
 			ret = -EINVAL;
 			goto out;
@@ -1119,7 +1126,17 @@ static int nvmf_parse_options(struct nvmf_ctrl_options *opts,
 			ret = PTR_ERR(key);
 			goto out;
 		}
-		pr_debug("using dhchap ctrl key %08x\n", key_serial(key));
+		down_read(&key->sem);
+		ctrl_key_len = nvme_dhchap_psk_len(key);
+		up_read(&key->sem);
+		if (ctrl_key_len < host_key_len) {
+			pr_debug("ctrl key length mismatch (host %lu, ctrl %lu)\n",
+				 host_key_len, ctrl_key_len);
+			ret = -EINVAL;
+			goto out;
+		}
+		pr_debug("using dhchap ctrl key %08x (len %lu)\n",
+			 key_serial(key), ctrl_key_len);
 		opts->dhchap_ctrl_key = key;
 	}
 

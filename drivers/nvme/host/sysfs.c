@@ -601,7 +601,7 @@ static ssize_t nvme_ctrl_dhchap_secret_store(struct device *dev,
 	struct key *key, *old_key;
 	char *dhchap_secret;
 	bool generated = false;
-	size_t len;
+	size_t len, host_key_len = 0, ctrl_key_len;
 	int ret;
 
 	if (!ctrl->host_key || !strlen(buf))
@@ -621,6 +621,8 @@ static ssize_t nvme_ctrl_dhchap_secret_store(struct device *dev,
 	}
 	down_read(&key->sem);
 	ret = key_validate(key);
+	if (!ret)
+		host_key_len = nvme_dhchap_psk_len(key);
 	up_read(&key->sem);
 	if (ret) {
 		dev_warn(ctrl->dev, "key %08x invalidated\n", key_serial(key));
@@ -634,12 +636,26 @@ static ssize_t nvme_ctrl_dhchap_secret_store(struct device *dev,
 		return ret;
 	}
 	mutex_lock(&ctrl->dhchap_auth_mutex);
+	if (ctrl->ctrl_key) {
+		down_read(&ctrl->ctrl_key->sem);
+		ctrl_key_len = nvme_dhchap_psk_len(ctrl->ctrl_key);
+		up_read(&ctrl->ctrl_key->sem);
+		if (host_key_len < ctrl_key_len) {
+			old_key = ctrl->ctrl_key;
+			ctrl->ctrl_key = NULL;
+			if (ctrl->ctrl_key_generated) {
+				dev_dbg(ctrl->dev, "revoke ctrl key %08x\n",
+					key_serial(old_key));
+				key_revoke(old_key);
+			}
+			key_put(old_key);
+		}
+	}
 	old_key = ctrl->host_key;
 	if (ctrl->host_key_generated) {
 		dev_dbg(ctrl->dev, "revoke key %08x\n",
 			key_serial(old_key));
 		key_revoke(old_key);
-		synchronize_rcu();
 	}
 	ctrl->host_key = key;
 	ctrl->host_key_generated = generated;
@@ -688,11 +704,17 @@ static ssize_t nvme_ctrl_dhchap_ctrl_secret_store(struct device *dev,
 	struct key *key, *old_key;
 	char *dhchap_secret;
 	bool generated = false;
-	size_t len;
+	size_t len, host_key_len, ctrl_key_len = 0;
 	int ret;
 
 	if (!ctrl->ctrl_key || !strlen(buf))
 		return -EINVAL;
+
+	if (!ctrl->host_key)
+		return -EINVAL;
+	down_read(&ctrl->host_key->sem);
+	host_key_len = nvme_dhchap_psk_len(ctrl->host_key);
+	up_read(&ctrl->host_key->sem);
 
 	len = strcspn(buf, "\n");
 	dhchap_secret = kzalloc(len + 1, GFP_KERNEL);
@@ -708,6 +730,14 @@ static ssize_t nvme_ctrl_dhchap_ctrl_secret_store(struct device *dev,
 	}
 	down_read(&key->sem);
 	ret = key_validate(key);
+	if (!ret) {
+		ctrl_key_len = nvme_dhchap_psk_len(key);
+		if (host_key_len > ctrl_key_len) {
+			dev_warn(ctrl->dev, "ctrl key length mismatch (host %lu, ctrl %lu)\n",
+				 host_key_len, ctrl_key_len);
+			ret = -EKEYREJECTED;
+		}
+	}
 	up_read(&key->sem);
 	if (ret) {
 		dev_warn(ctrl->dev, "key %08x invalidated\n", key_serial(key));
