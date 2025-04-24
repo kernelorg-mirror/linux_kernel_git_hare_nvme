@@ -155,14 +155,6 @@ size_t nvme_auth_hmac_hash_len(u8 hmac_id)
 }
 EXPORT_SYMBOL_GPL(nvme_auth_hmac_hash_len);
 
-u32 nvme_auth_key_struct_size(u32 key_len)
-{
-	struct nvme_dhchap_key key;
-
-	return struct_size(&key, key, key_len);
-}
-EXPORT_SYMBOL_GPL(nvme_auth_key_struct_size);
-
 struct key *nvme_auth_extract_key(struct key *keyring, const u8 *secret,
 				  size_t secret_len)
 {
@@ -175,27 +167,6 @@ struct key *nvme_auth_extract_key(struct key *keyring, const u8 *secret,
 	return key;
 }
 EXPORT_SYMBOL_GPL(nvme_auth_extract_key);
-
-struct nvme_dhchap_key *nvme_auth_alloc_key(u32 len, u8 hash)
-{
-	u32 num_bytes = nvme_auth_key_struct_size(len);
-	struct nvme_dhchap_key *key = kzalloc(num_bytes, GFP_KERNEL);
-
-	if (key) {
-		key->len = len;
-		key->hash = hash;
-	}
-	return key;
-}
-EXPORT_SYMBOL_GPL(nvme_auth_alloc_key);
-
-void nvme_auth_free_key(struct nvme_dhchap_key *key)
-{
-	if (!key)
-		return;
-	kfree_sensitive(key);
-}
-EXPORT_SYMBOL_GPL(nvme_auth_free_key);
 
 int nvme_auth_transform_key(struct key *key, char *nqn,
 			    u8 **transformed_secret)
