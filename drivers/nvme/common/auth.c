@@ -156,14 +156,21 @@ size_t nvme_auth_hmac_hash_len(u8 hmac_id)
 EXPORT_SYMBOL_GPL(nvme_auth_hmac_hash_len);
 
 struct key *nvme_auth_extract_key(struct key *keyring, const u8 *secret,
-				  size_t secret_len)
+				  size_t secret_len, bool *generated)
 {
 	struct key *key;
 
+	key = nvme_dhchap_psk_lookup(keyring, secret);
+	if (!IS_ERR(key)) {
+		*generated = false;
+		return key;
+	}
 	key = nvme_dhchap_psk_refresh(keyring, secret, secret_len);
-	if (!IS_ERR(key))
-		pr_debug("generated dhchap key %08x\n",
-			 key_serial(key));
+	if (!IS_ERR(key)) {
+		*generated = true;
+		pr_debug("generated dhchap key %s\n",
+			 key->description);
+	}
 	return key;
 }
 EXPORT_SYMBOL_GPL(nvme_auth_extract_key);
