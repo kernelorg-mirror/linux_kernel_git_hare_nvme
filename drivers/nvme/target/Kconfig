@@ -96,7 +96,9 @@ config NVME_TARGET_TCP
 config NVME_TARGET_TCP_TLS
 	bool "NVMe over Fabrics TCP target TLS encryption support"
 	depends on NVME_TARGET_TCP
+	select TLS
 	select NET_HANDSHAKE
+	select NVME_KEYRING
 	help
 	  Enables TLS encryption for the NVMe TCP target using the netlink handshake API.
 
