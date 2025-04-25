@@ -14,6 +14,8 @@
 #include <crypto/hkdf.h>
 #include <linux/nvme.h>
 #include <linux/nvme-auth.h>
+#include <linux/nvme-keyring.h>
+#include <keys/user-type.h>
 
 #define HKDF_MAX_HASHLEN 64
 
@@ -153,98 +155,28 @@ size_t nvme_auth_hmac_hash_len(u8 hmac_id)
 }
 EXPORT_SYMBOL_GPL(nvme_auth_hmac_hash_len);
 
-u32 nvme_auth_key_struct_size(u32 key_len)
+struct key *nvme_auth_extract_key(struct key *keyring, const u8 *secret,
+				  size_t secret_len)
 {
-	struct nvme_dhchap_key key;
+	struct key *key;
 
-	return struct_size(&key, key, key_len);
-}
-EXPORT_SYMBOL_GPL(nvme_auth_key_struct_size);
-
-struct nvme_dhchap_key *nvme_auth_extract_key(unsigned char *secret,
-					      u8 key_hash)
-{
-	struct nvme_dhchap_key *key;
-	unsigned char *p;
-	u32 crc;
-	int ret, key_len;
-	size_t allocated_len = strlen(secret);
-
-	/* Secret might be affixed with a ':' */
-	p = strrchr(secret, ':');
-	if (p)
-		allocated_len = p - secret;
-	key = nvme_auth_alloc_key(allocated_len, 0);
-	if (!key)
-		return ERR_PTR(-ENOMEM);
-
-	key_len = base64_decode(secret, allocated_len, key->key);
-	if (key_len < 0) {
-		pr_debug("base64 key decoding error %d\n",
-			 key_len);
-		ret = key_len;
-		goto out_free_secret;
-	}
-
-	if (key_len != 36 && key_len != 52 &&
-	    key_len != 68) {
-		pr_err("Invalid key len %d\n", key_len);
-		ret = -EINVAL;
-		goto out_free_secret;
-	}
-
-	/* The last four bytes is the CRC in little-endian format */
-	key_len -= 4;
-	/*
-	 * The linux implementation doesn't do pre- and post-increments,
-	 * so we have to do it manually.
-	 */
-	crc = ~crc32(~0, key->key, key_len);
-
-	if (get_unaligned_le32(key->key + key_len) != crc) {
-		pr_err("key crc mismatch (key %08x, crc %08x)\n",
-		       get_unaligned_le32(key->key + key_len), crc);
-		ret = -EKEYREJECTED;
-		goto out_free_secret;
-	}
-	key->len = key_len;
-	key->hash = key_hash;
+	key = nvme_dhchap_psk_refresh(keyring, secret, secret_len);
+	if (!IS_ERR(key))
+		pr_debug("generated dhchap key %08x\n",
+			 key_serial(key));
 	return key;
-out_free_secret:
-	nvme_auth_free_key(key);
-	return ERR_PTR(ret);
 }
 EXPORT_SYMBOL_GPL(nvme_auth_extract_key);
 
-struct nvme_dhchap_key *nvme_auth_alloc_key(u32 len, u8 hash)
-{
-	u32 num_bytes = nvme_auth_key_struct_size(len);
-	struct nvme_dhchap_key *key = kzalloc(num_bytes, GFP_KERNEL);
-
-	if (key) {
-		key->len = len;
-		key->hash = hash;
-	}
-	return key;
-}
-EXPORT_SYMBOL_GPL(nvme_auth_alloc_key);
-
-void nvme_auth_free_key(struct nvme_dhchap_key *key)
-{
-	if (!key)
-		return;
-	kfree_sensitive(key);
-}
-EXPORT_SYMBOL_GPL(nvme_auth_free_key);
-
-int nvme_auth_transform_key(struct nvme_dhchap_key *key, char *nqn,
+int nvme_auth_transform_key(struct key *key, char *nqn,
 			    u8 **transformed_secret)
 {
 	const char *hmac_name;
 	struct crypto_shash *key_tfm;
 	SHASH_DESC_ON_STACK(shash, key_tfm);
+	long key_len = 0;
 	u8 *transformed_data;
-	u8 *key_data;
+	u8 *key_data, key_hash;
 	size_t transformed_len;
 	int ret;
 
@@ -252,17 +184,47 @@ int nvme_auth_transform_key(struct nvme_dhchap_key *key, char *nqn,
 		pr_warn("No key specified\n");
 		return -ENOKEY;
 	}
-	key_data = kzalloc(key->len, GFP_KERNEL);
-	if (!key_data)
-		return -ENOMEM;
-	memcpy(key_data, key->key, key->len);
-	if (key->hash == 0) {
-		*transformed_secret = key_data;
-		return key->len;
+	down_read(&key->sem);
+	ret = key_validate(key);
+	if (ret) {
+		pr_warn("%s: key %08x invalidated\n",
+			__func__, key_serial(key));
+		up_read(&key->sem);
+		return ret;
 	}
-	hmac_name = nvme_auth_hmac_name(key->hash);
+	key_len = user_read(key, NULL, 0);
+	if (key_len <= 0) {
+		pr_warn("failed to get length from key %08x: error %ld\n",
+			key_serial(key), key_len);
+		up_read(&key->sem);
+		return key_len;
+	}
+	key_data = kzalloc(key_len, GFP_KERNEL);
+	if (!key_data) {
+		up_read(&key->sem);
+		return -ENOMEM;
+	}
+
+	ret = user_read(key, key_data, key_len);
+	key_hash = nvme_dhchap_psk_hash(key);
+	up_read(&key->sem);
+	if (ret != key_len) {
+		if (ret < 0) {
+			pr_warn("failed to read data from key %08x: error %d\n",
+				key_serial(key), ret);
+		} else {
+			pr_warn("only read %d of %ld bytes from key %08x\n",
+				ret, key_len, key_serial(key));
+		}
+		goto out_free_data;
+	}
+	if (key_hash == 0) {
+		*transformed_secret = key_data;
+		return key_len;
+	}
+	hmac_name = nvme_auth_hmac_name(key_hash);
 	if (!hmac_name) {
-		pr_warn("Invalid key hash id %d\n", key->hash);
+		pr_warn("Invalid key hash id %d\n", key_hash);
 		ret = -EINVAL;
 		goto out_free_data;
 	}
@@ -274,9 +236,9 @@ int nvme_auth_transform_key(struct nvme_dhchap_key *key, char *nqn,
 	}
 
 	transformed_len = crypto_shash_digestsize(key_tfm);
-	if (transformed_len != key->len) {
+	if (transformed_len != key_len) {
 		pr_warn("incompatible digest size %ld for key (hash %s, len %ld)\n",
-			transformed_len, hmac_name, key->len);
+			transformed_len, hmac_name, key_len);
 		ret = -EINVAL;
 		goto out_free_tfm;
 	}
@@ -288,7 +250,7 @@ int nvme_auth_transform_key(struct nvme_dhchap_key *key, char *nqn,
 	}
 
 	shash->tfm = key_tfm;
-	ret = crypto_shash_setkey(key_tfm, key->key, key->len);
+	ret = crypto_shash_setkey(key_tfm, key_data, key_len);
 	if (ret < 0)
 		goto out_free_transformed_data;
 	ret = crypto_shash_init(shash);
@@ -304,8 +266,9 @@ int nvme_auth_transform_key(struct nvme_dhchap_key *key, char *nqn,
 	if (ret < 0)
 		goto out_free_transformed_data;
 
-	crypto_free_shash(key_tfm);
 	*transformed_secret = transformed_data;
+	crypto_free_shash(key_tfm);
+	kfree(key_data);
 
 	return transformed_len;
 
@@ -453,31 +416,6 @@ int nvme_auth_gen_shared_secret(struct crypto_kpp *dh_tfm,
 	return ret;
 }
 EXPORT_SYMBOL_GPL(nvme_auth_gen_shared_secret);
-
-int nvme_auth_generate_key(u8 *secret, struct nvme_dhchap_key **ret_key)
-{
-	struct nvme_dhchap_key *key;
-	u8 key_hash;
-
-	if (!secret) {
-		*ret_key = NULL;
-		return 0;
-	}
-
-	if (sscanf(secret, "DHHC-1:%hhd:%*s:", &key_hash) != 1)
-		return -EINVAL;
-
-	/* Pass in the secret without the 'DHHC-1:XX:' prefix */
-	key = nvme_auth_extract_key(secret + 10, key_hash);
-	if (IS_ERR(key)) {
-		*ret_key = NULL;
-		return PTR_ERR(key);
-	}
-
-	*ret_key = key;
-	return 0;
-}
-EXPORT_SYMBOL_GPL(nvme_auth_generate_key);
 
 /**
  * nvme_auth_generate_psk - Generate a PSK for TLS
