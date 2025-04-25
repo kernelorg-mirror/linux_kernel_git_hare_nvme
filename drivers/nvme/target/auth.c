@@ -297,7 +297,8 @@ int nvmet_auth_host_hash(struct nvmet_req *req, u8 *response,
 	struct nvmet_ctrl *ctrl = req->sq->ctrl;
 	const char *hash_name;
 	u8 *challenge = req->sq->dhchap_c1;
-	struct nvme_dhchap_key *transformed_key;
+	u8 *transformed_secret;
+	size_t transformed_len;
 	u8 buf[4];
 	int ret;
 
@@ -321,15 +322,14 @@ int nvmet_auth_host_hash(struct nvmet_req *req, u8 *response,
 		goto out_free_tfm;
 	}
 
-	transformed_key = nvme_auth_transform_key(ctrl->host_key,
-						  ctrl->hostnqn);
-	if (IS_ERR(transformed_key)) {
-		ret = PTR_ERR(transformed_key);
+	ret = nvme_auth_transform_key(ctrl->host_key, ctrl->hostnqn,
+				      &transformed_secret);
+	if (ret < 0)
 		goto out_free_tfm;
-	}
 
-	ret = crypto_shash_setkey(shash_tfm, transformed_key->key,
-				  transformed_key->len);
+	transformed_len = ret;
+	ret = crypto_shash_setkey(shash_tfm, transformed_secret,
+				  transformed_len);
 	if (ret)
 		goto out_free_response;
 
@@ -389,7 +389,7 @@ out:
 	if (challenge != req->sq->dhchap_c1)
 		kfree(challenge);
 out_free_response:
-	nvme_auth_free_key(transformed_key);
+	kfree(transformed_secret);
 out_free_tfm:
 	crypto_free_shash(shash_tfm);
 	return ret;
@@ -403,7 +403,8 @@ int nvmet_auth_ctrl_hash(struct nvmet_req *req, u8 *response,
 	struct nvmet_ctrl *ctrl = req->sq->ctrl;
 	const char *hash_name;
 	u8 *challenge = req->sq->dhchap_c2;
-	struct nvme_dhchap_key *transformed_key;
+	u8 *transformed_secret;
+	size_t transformed_len;
 	u8 buf[4];
 	int ret;
 
@@ -427,15 +428,14 @@ int nvmet_auth_ctrl_hash(struct nvmet_req *req, u8 *response,
 		goto out_free_tfm;
 	}
 
-	transformed_key = nvme_auth_transform_key(ctrl->ctrl_key,
-						ctrl->subsysnqn);
-	if (IS_ERR(transformed_key)) {
-		ret = PTR_ERR(transformed_key);
+	ret = nvme_auth_transform_key(ctrl->ctrl_key, ctrl->subsysnqn,
+				      &transformed_secret);
+	if (ret < 0)
 		goto out_free_tfm;
-	}
+	transformed_len = ret;
 
-	ret = crypto_shash_setkey(shash_tfm, transformed_key->key,
-				  transformed_key->len);
+	ret = crypto_shash_setkey(shash_tfm, transformed_secret,
+				  transformed_len);
 	if (ret)
 		goto out_free_response;
 
@@ -500,7 +500,7 @@ out_free_challenge:
 	if (challenge != req->sq->dhchap_c2)
 		kfree(challenge);
 out_free_response:
-	nvme_auth_free_key(transformed_key);
+	kfree(transformed_secret);
 out_free_tfm:
 	crypto_free_shash(shash_tfm);
 	return ret;

@@ -237,70 +237,86 @@ void nvme_auth_free_key(struct nvme_dhchap_key *key)
 }
 EXPORT_SYMBOL_GPL(nvme_auth_free_key);
 
-struct nvme_dhchap_key *nvme_auth_transform_key(
-		struct nvme_dhchap_key *key, char *nqn)
+int nvme_auth_transform_key(struct nvme_dhchap_key *key, char *nqn,
+			    u8 **transformed_secret)
 {
 	const char *hmac_name;
 	struct crypto_shash *key_tfm;
 	SHASH_DESC_ON_STACK(shash, key_tfm);
-	struct nvme_dhchap_key *transformed_key;
-	int ret, key_len;
+	u8 *transformed_data;
+	u8 *key_data;
+	size_t transformed_len;
+	int ret;
 
 	if (!key) {
 		pr_warn("No key specified\n");
-		return ERR_PTR(-ENOKEY);
+		return -ENOKEY;
 	}
+	key_data = kzalloc(key->len, GFP_KERNEL);
+	if (!key_data)
+		return -ENOMEM;
+	memcpy(key_data, key->key, key->len);
 	if (key->hash == 0) {
-		key_len = nvme_auth_key_struct_size(key->len);
-		transformed_key = kmemdup(key, key_len, GFP_KERNEL);
-		if (!transformed_key)
-			return ERR_PTR(-ENOMEM);
-		return transformed_key;
+		*transformed_secret = key_data;
+		return key->len;
 	}
 	hmac_name = nvme_auth_hmac_name(key->hash);
 	if (!hmac_name) {
 		pr_warn("Invalid key hash id %d\n", key->hash);
-		return ERR_PTR(-EINVAL);
+		ret = -EINVAL;
+		goto out_free_data;
 	}
 
 	key_tfm = crypto_alloc_shash(hmac_name, 0, 0);
-	if (IS_ERR(key_tfm))
-		return ERR_CAST(key_tfm);
+	if (IS_ERR(key_tfm)) {
+		ret = PTR_ERR(key_tfm);
+		goto out_free_data;
+	}
 
-	key_len = crypto_shash_digestsize(key_tfm);
-	transformed_key = nvme_auth_alloc_key(key_len, key->hash);
-	if (!transformed_key) {
+	transformed_len = crypto_shash_digestsize(key_tfm);
+	if (transformed_len != key->len) {
+		pr_warn("incompatible digest size %ld for key (hash %s, len %ld)\n",
+			transformed_len, hmac_name, key->len);
+		ret = -EINVAL;
+		goto out_free_tfm;
+	}
+
+	transformed_data = kzalloc(transformed_len, GFP_KERNEL);
+	if (!transformed_data) {
 		ret = -ENOMEM;
-		goto out_free_key;
+		goto out_free_tfm;
 	}
 
 	shash->tfm = key_tfm;
 	ret = crypto_shash_setkey(key_tfm, key->key, key->len);
 	if (ret < 0)
-		goto out_free_transformed_key;
+		goto out_free_transformed_data;
 	ret = crypto_shash_init(shash);
 	if (ret < 0)
-		goto out_free_transformed_key;
+		goto out_free_transformed_data;
 	ret = crypto_shash_update(shash, nqn, strlen(nqn));
 	if (ret < 0)
-		goto out_free_transformed_key;
+		goto out_free_transformed_data;
 	ret = crypto_shash_update(shash, "NVMe-over-Fabrics", 17);
 	if (ret < 0)
-		goto out_free_transformed_key;
-	ret = crypto_shash_final(shash, transformed_key->key);
+		goto out_free_transformed_data;
+	ret = crypto_shash_final(shash, transformed_data);
 	if (ret < 0)
-		goto out_free_transformed_key;
+		goto out_free_transformed_data;
 
 	crypto_free_shash(key_tfm);
+	*transformed_secret = transformed_data;
 
-	return transformed_key;
+	return transformed_len;
 
-out_free_transformed_key:
-	nvme_auth_free_key(transformed_key);
-out_free_key:
+out_free_transformed_data:
+	kfree(transformed_data);
+out_free_tfm:
 	crypto_free_shash(key_tfm);
+out_free_data:
+	kfree(key_data);
 
-	return ERR_PTR(ret);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(nvme_auth_transform_key);
 
