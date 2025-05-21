@@ -411,6 +411,9 @@ static inline void nvme_tcp_queue_request(struct nvme_tcp_request *req,
 	empty = llist_add(&req->lentry, &queue->req_list) &&
 		list_empty(&queue->send_list) && !queue->request;
 
+	if (!sk_stream_is_writeable(queue->sock->sk))
+		empty = false;
+
 	/*
 	 * if we're the first on the send_list and we can try to send
 	 * directly, otherwise queue io_work. Also, only do that if we
@@ -422,7 +425,8 @@ static inline void nvme_tcp_queue_request(struct nvme_tcp_request *req,
 		mutex_unlock(&queue->send_mutex);
 	}
 
-	if (last && nvme_tcp_queue_has_pending(queue))
+	if (last && nvme_tcp_queue_has_pending(queue) &&
+	    sk_stream_is_writeable(queue->sock->sk))
 		queue_work_on(queue->io_cpu, nvme_tcp_wq, &queue->io_work);
 }
 
@@ -1074,7 +1078,7 @@ static void nvme_tcp_write_space(struct sock *sk)
 
 	read_lock_bh(&sk->sk_callback_lock);
 	queue = sk->sk_user_data;
-	if (likely(queue && sk_stream_is_writeable(sk))) {
+	if (likely(queue)) {
 		clear_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
 		queue_work_on(queue->io_cpu, nvme_tcp_wq, &queue->io_work);
 	}
