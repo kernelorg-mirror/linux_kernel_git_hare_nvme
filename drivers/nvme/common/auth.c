@@ -143,20 +143,32 @@ EXPORT_SYMBOL_GPL(nvme_auth_hmac_hash_len);
 /**
  * nvme_auth_extract_key - extract the DH-HMAC-CHAP key
  *
- * @secret: key data
- * @secret_len: length of @secret
+ * @input: key serial or key data
+ * @input_len: length of @input
+ * @generated: indicate whether a key has been generated
  *
- * Extracts a dhchap key from @secret.
+ * Extracts or generates a key from @input.
+ * @input can either be a key serial or raw key data; in
+ * the latter case a key is generated from @input and
+ * @generated is set to 'true'.
  *
  * Returns the dhchap key or an error pointer on failure.
  */
-struct key *nvme_auth_extract_key(struct key *keyring, const char *secret,
-				  size_t secret_len)
+struct key *nvme_auth_extract_key(struct key *keyring, const char *input,
+				  size_t input_len, bool *generated)
 {
 	struct key *key;
 
-	key = nvme_dhchap_psk_create(keyring, secret, secret_len);
+	/* Check if @input is a key serial number */
+	key = nvme_dhchap_psk_lookup(keyring, input);
 	if (!IS_ERR(key)) {
+		*generated = false;
+		return key;
+	}
+	/* Generate a key from @input data */
+	key = nvme_dhchap_psk_create(keyring, input, input_len);
+	if (!IS_ERR(key)) {
+		*generated = true;
 		pr_debug("generated dhchap key %s\n",
 			 key->description);
 	}
