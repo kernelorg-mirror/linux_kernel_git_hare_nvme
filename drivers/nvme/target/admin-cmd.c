@@ -200,6 +200,7 @@ static void nvmet_execute_get_log_page_error(struct nvmet_req *req)
 
 static void nvmet_execute_get_supported_log_pages(struct nvmet_req *req)
 {
+	struct nvmet_ctrl *ctrl = req->sq->ctrl;
 	struct nvme_supported_log *logs;
 	u16 status;
 
@@ -220,7 +221,14 @@ static void nvmet_execute_get_supported_log_pages(struct nvmet_req *req)
 	logs->lids[NVME_LOG_FEATURES] = cpu_to_le32(NVME_LIDS_LSUPP);
 	logs->lids[NVME_LOG_RMI] = cpu_to_le32(NVME_LIDS_LSUPP);
 	logs->lids[NVME_LOG_RESERVATION] = cpu_to_le32(NVME_LIDS_LSUPP);
+	if (nvmet_bpf_supported(ctrl->subsys, req->port)) {
+		int i;
 
+		for (i = 0; i < 256; i++) {
+			if (nvmet_bpf_log_page_supported(req, i))
+				logs->lids[i] = cpu_to_le32(NVME_LIDS_LSUPP);
+		}
+	}
 	status = nvmet_copy_to_sgl(req, 0, logs, sizeof(*logs));
 	kfree(logs);
 out:
@@ -607,10 +615,19 @@ out:
 
 static void nvmet_execute_get_log_page(struct nvmet_req *req)
 {
+	struct nvmet_ctrl *ctrl = req->sq->ctrl;
+	u8 lid;
+
 	if (!nvmet_check_transfer_len(req, nvmet_get_log_page_len(req->cmd)))
 		return;
 
-	switch (req->cmd->get_log_page.lid) {
+	lid = req->cmd->get_log_page.lid;
+
+	if (nvmet_bpf_supported(ctrl->subsys, req->port) &&
+	    nvmet_bpf_log_page_supported(req, lid))
+		return nvmet_bpf_get_log_page(ctrl->subsys, req);
+
+	switch (lid) {
 	case NVME_LOG_SUPPORTED:
 		return nvmet_execute_get_supported_log_pages(req);
 	case NVME_LOG_ERROR:
@@ -639,8 +656,7 @@ static void nvmet_execute_get_log_page(struct nvmet_req *req)
 	case NVME_LOG_RESERVATION:
 		return nvmet_execute_get_log_page_resv(req);
 	}
-	pr_debug("unhandled lid %d on qid %d\n",
-	       req->cmd->get_log_page.lid, req->sq->qid);
+	pr_debug("unhandled lid %d on qid %d\n", lid, req->sq->qid);
 	req->error_loc = offsetof(struct nvme_get_log_page_command, lid);
 	nvmet_req_complete(req, NVME_SC_INVALID_FIELD | NVME_STATUS_DNR);
 }

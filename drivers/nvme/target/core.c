@@ -1977,6 +1977,9 @@ static int __init nvmet_init(void)
 	if (error)
 		goto out_exit_discovery;
 
+#ifdef CONFIG_NVME_TARGET_BPF
+	nvmet_bpf_struct_ops_init();
+#endif
 	return 0;
 
 out_exit_discovery:

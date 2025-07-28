@@ -26,6 +26,14 @@ config NVME_TARGET_DEBUGFS
 
 	  If unsure, say N.
 
+config NVME_TARGET_BPF
+        bool "NVMe Target eBPF support"
+	depends on NVME_TARGET
+	help
+	  This enables eBPF support for the target
+
+	  If unsure, say N.
+
 config NVME_TARGET_PASSTHRU
 	bool "NVMe Target Passthrough support"
 	depends on NVME_TARGET

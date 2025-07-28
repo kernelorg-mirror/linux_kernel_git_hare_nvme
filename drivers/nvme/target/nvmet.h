@@ -21,6 +21,9 @@
 #include <linux/radix-tree.h>
 #include <linux/t10-pi.h>
 #include <linux/kfifo.h>
+#include <linux/bpf.h>
+
+#include "bpf.h"
 
 #define NVMET_DEFAULT_VS		NVME_VS(2, 1, 0)
 
@@ -405,6 +408,9 @@ struct nvmet_host_link {
 struct nvmet_subsys_link {
 	struct list_head	entry;
 	struct nvmet_subsys	*subsys;
+#ifdef CONFIG_NVME_TARGET_BPF
+	struct nvmet_bpf_ops	*bpf_ops;
+#endif
 };
 
 struct nvmet_req;
