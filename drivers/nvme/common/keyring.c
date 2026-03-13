@@ -461,6 +461,104 @@ static struct key_type nvme_dhchap_psk_key_type = {
 	.read           = nvme_dhchap_psk_read,
 };
 
+/**
+ * nvme_dhchap_psk_create - Create DH-HMAC-CHAP key
+ * @keyring: keyring for the new key or NULL for the default keyring
+ * @data: Key data
+ * @data_len: Length of @data
+ *
+ * Creates a new DH-HMAC-CHAP key with a random UUID as the key identity.
+ * Returns the new key or an error pointer on failure.
+ */
+struct key *nvme_dhchap_psk_create(struct key *keyring,
+		const u8 *data, size_t data_len)
+{
+	key_perm_t keyperm =
+		KEY_POS_SEARCH | KEY_POS_VIEW | KEY_POS_READ |
+		KEY_POS_WRITE | KEY_POS_LINK | KEY_POS_SETATTR |
+		KEY_USR_SEARCH | KEY_USR_VIEW | KEY_USR_READ;
+	char *identity;
+	key_ref_t keyref;
+	key_serial_t keyring_id;
+	struct key *key;
+	uuid_t key_uuid;
+
+	if (data == NULL || !data_len)
+		return ERR_PTR(-EINVAL);
+
+	generate_random_uuid(key_uuid.b);
+	identity = kasprintf(GFP_KERNEL, "%pU", &key_uuid);
+	if (!identity)
+		return ERR_PTR(-ENOMEM);
+	if (!keyring)
+		keyring = nvme_keyring;
+	keyring_id = key_serial(keyring);
+
+	pr_debug("keyring %x generate dhchap psk '%s'\n",
+		 keyring_id, identity);
+	keyref = key_create(make_key_ref(keyring, true),
+			    "dhchap", identity, data, data_len,
+			    keyperm, KEY_ALLOC_NOT_IN_QUOTA |
+			    KEY_ALLOC_BUILT_IN |
+			    KEY_ALLOC_BYPASS_RESTRICTION);
+	if (IS_ERR(keyref)) {
+		pr_warn("refresh dhchap psk '%s' failed, error %ld\n",
+			identity, PTR_ERR(keyref));
+		kfree(identity);
+		return ERR_PTR(-ENOKEY);
+	}
+	key = key_ref_to_ptr(keyref);
+	pr_debug("generated dhchap psk %08x\n", key_serial(key));
+	kfree(identity);
+	return key;
+}
+EXPORT_SYMBOL_GPL(nvme_dhchap_psk_create);
+
+/**
+ * nvme_dhchap_psk_lookup - Lookup DH-HMAC-CHAP key
+ * @keyring: keyring to use or NULL for default keyring
+ * @identity: key identity to search
+ *
+ * Looks up a key with identity @identity from keyring @keyring.
+ * Returns the key or an error pointer if not found.
+ */
+struct key *nvme_dhchap_psk_lookup(struct key *keyring, const char *identity)
+{
+	key_ref_t keyref;
+	key_serial_t keyring_id;
+
+	if (!keyring)
+		keyring = nvme_keyring;
+	keyring_id = key_serial(keyring);
+	pr_debug("keyring %x lookup dhchap psk '%s'\n",
+		 keyring_id, identity);
+
+	keyref = keyring_search(make_key_ref(keyring, true),
+				&nvme_dhchap_psk_key_type,
+				identity, false);
+	if (IS_ERR(keyref)) {
+		pr_debug("lookup dhchap psk '%s' failed, error %ld\n",
+			 identity, PTR_ERR(keyref));
+		return ERR_PTR(-ENOKEY);
+	}
+
+	return key_ref_to_ptr(keyref);
+}
+EXPORT_SYMBOL_GPL(nvme_dhchap_psk_lookup);
+
+u8 nvme_dhchap_psk_hash(struct key *key)
+{
+	const struct user_key_payload *upayload;
+	u8 hmac;
+
+	if (!key)
+		return 0;
+	upayload = user_key_payload_locked(key);
+	hmac = upayload->data[upayload->datalen + 5];
+	return hmac;
+}
+EXPORT_SYMBOL_GPL(nvme_dhchap_psk_hash);
+
 static int __init nvme_keyring_init(void)
 {
 	int err;
