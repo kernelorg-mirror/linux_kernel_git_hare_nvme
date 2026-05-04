@@ -15,6 +15,8 @@
 #include <linux/pagemap.h>
 #include <linux/init.h>
 #include <linux/slab.h>
+#include <linux/mnt_namespace.h>
+#include <net/net_namespace.h>
 
 #include <linux/configfs.h>
 #include "configfs_internal.h"
@@ -26,6 +28,13 @@ static struct vfsmount *configfs_mount = NULL;
 struct kmem_cache *configfs_dir_cachep;
 static int configfs_mnt_count = 0;
 
+
+static const char root_name[] = "root";
+
+struct configfs_fs_info {
+	struct config_group group;
+	struct ns_common *ns;
+};
 
 static void configfs_free_inode(struct inode *inode)
 {
@@ -40,28 +49,21 @@ static const struct super_operations configfs_ops = {
 	.free_inode	= configfs_free_inode,
 };
 
-static struct config_group configfs_root_group = {
-	.cg_item = {
-		.ci_namebuf	= "root",
-		.ci_name	= configfs_root_group.cg_item.ci_namebuf,
-	},
-};
-
 int configfs_is_root(struct config_item *item)
 {
-	return item == &configfs_root_group.cg_item;
+	return item->ci_name == root_name;
 }
 
 static struct configfs_dirent configfs_root = {
 	.s_sibling	= LIST_HEAD_INIT(configfs_root.s_sibling),
 	.s_children	= LIST_HEAD_INIT(configfs_root.s_children),
-	.s_element	= &configfs_root_group.cg_item,
 	.s_type		= CONFIGFS_ROOT,
 	.s_iattr	= NULL,
 };
 
 static int configfs_fill_super(struct super_block *sb, struct fs_context *fc)
 {
+	struct configfs_fs_info *fsi = sb->s_fs_info;
 	struct inode *inode;
 	struct dentry *root;
 
@@ -70,6 +72,7 @@ static int configfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	sb->s_magic = CONFIGFS_MAGIC;
 	sb->s_op = &configfs_ops;
 	sb->s_time_gran = 1;
+	configfs_root.s_element = &fsi->group.cg_item;
 
 	inode = configfs_new_inode(S_IFDIR | S_IRWXU | S_IRUGO | S_IXUGO,
 				   &configfs_root, sb);
@@ -88,8 +91,8 @@ static int configfs_fill_super(struct super_block *sb, struct fs_context *fc)
 		pr_debug("%s: could not get root dentry!\n",__func__);
 		return -ENOMEM;
 	}
-	config_group_init(&configfs_root_group);
-	configfs_root_group.cg_item.ci_dentry = root;
+	config_group_init(&fsi->group);
+	fsi->group.cg_item.ci_dentry = root;
 	root->d_fsdata = &configfs_root;
 	sb->s_root = root;
 	set_default_d_op(sb, &configfs_dentry_ops); /* the rest get that */
@@ -108,15 +111,41 @@ static const struct fs_context_operations configfs_context_ops = {
 
 static int configfs_init_fs_context(struct fs_context *fc)
 {
+	struct configfs_fs_info *fsi;
+
+	fsi = kzalloc_obj(*fsi);
+	if (!fsi)
+		return -ENOMEM;
+	fsi->group.cg_item.ci_name = (char *)root_name;
+	fsi->ns = kobj_ns_grab_current(KOBJ_NS_TYPE_NET);
+	if (fsi->ns) {
+		struct net *netns = to_net_ns(fsi->ns);
+
+		put_user_ns(fc->user_ns);
+		fc->user_ns = get_user_ns(netns->user_ns);
+	}
+	fc->s_fs_info = fsi;
 	fc->ops = &configfs_context_ops;
+	fc->global = true;
 	return 0;
+}
+
+static void configfs_kill_sb(struct super_block *sb)
+{
+	struct configfs_fs_info *fsi =
+		(struct configfs_fs_info *)(sb->s_fs_info);
+	struct ns_common *ns = fsi->ns;
+
+	kill_anon_super(sb);
+	kfree(fsi);
+	kobj_ns_drop(KOBJ_NS_TYPE_NET, ns);
 }
 
 static struct file_system_type configfs_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "configfs",
 	.init_fs_context = configfs_init_fs_context,
-	.kill_sb	= kill_anon_super,
+	.kill_sb	= configfs_kill_sb,
 };
 MODULE_ALIAS_FS("configfs");
 
