@@ -31,9 +31,15 @@ static int configfs_mnt_count = 0;
 
 static const char root_name[] = "root";
 
-struct configfs_fs_info {
-	struct config_group group;
+struct configfs_fs_context {
 	struct ns_common *ns;
+};
+
+struct configfs_super_info {
+	struct configfs_dirent root;
+	struct config_group group;
+	struct ns_common *ns_tag;
+	struct super_block *sb;
 };
 
 static void configfs_free_inode(struct inode *inode)
@@ -54,28 +60,31 @@ int configfs_is_root(struct config_item *item)
 	return item->ci_name == root_name;
 }
 
-static struct configfs_dirent configfs_root = {
-	.s_sibling	= LIST_HEAD_INIT(configfs_root.s_sibling),
-	.s_children	= LIST_HEAD_INIT(configfs_root.s_children),
-	.s_type		= CONFIGFS_ROOT,
-	.s_iattr	= NULL,
-};
-
 static int configfs_fill_super(struct super_block *sb, struct fs_context *fc)
 {
-	struct configfs_fs_info *fsi = sb->s_fs_info;
+	struct configfs_fs_context *cfc = fc->fs_private;
+	struct configfs_super_info *info;
 	struct inode *inode;
 	struct dentry *root;
 
+	info = kzalloc_obj(*info);
+	if (!info)
+		return -ENOMEM;
+
+	INIT_LIST_HEAD(&info->root.s_sibling);
+	INIT_LIST_HEAD(&info->root.s_children);
+	info->ns_tag = cfc->ns;
+	info->root.s_type = CONFIGFS_ROOT;
+	info->root.s_element = &info->group.cg_item;
+	info->group.cg_item.ci_name = (char *)root_name;
 	sb->s_blocksize = PAGE_SIZE;
 	sb->s_blocksize_bits = PAGE_SHIFT;
 	sb->s_magic = CONFIGFS_MAGIC;
 	sb->s_op = &configfs_ops;
 	sb->s_time_gran = 1;
-	configfs_root.s_element = &fsi->group.cg_item;
 
 	inode = configfs_new_inode(S_IFDIR | S_IRWXU | S_IRUGO | S_IXUGO,
-				   &configfs_root, sb);
+				   &info->root, sb);
 	if (inode) {
 		inode->i_op = &configfs_root_inode_operations;
 		inode->i_fop = &configfs_dir_operations;
@@ -91,10 +100,12 @@ static int configfs_fill_super(struct super_block *sb, struct fs_context *fc)
 		pr_debug("%s: could not get root dentry!\n",__func__);
 		return -ENOMEM;
 	}
-	config_group_init(&fsi->group);
-	fsi->group.cg_item.ci_dentry = root;
-	root->d_fsdata = &configfs_root;
+	config_group_init(&info->group);
+	info->group.cg_item.ci_dentry = root;
+	root->d_fsdata = &info->root;
 	sb->s_root = root;
+	info->sb = sb;
+	sb->s_fs_info = info;
 	set_default_d_op(sb, &configfs_dentry_ops); /* the rest get that */
 	sb->s_d_flags |= DCACHE_DONTCACHE;
 	return 0;
@@ -105,39 +116,47 @@ static int configfs_get_tree(struct fs_context *fc)
 	return get_tree_single(fc, configfs_fill_super);
 }
 
+static void configfs_fs_context_free(struct fs_context *fc)
+{
+	struct configfs_fs_context *cfc = fc->fs_private;
+
+	if (cfc->ns)
+		kobj_ns_drop(KOBJ_NS_TYPE_NET, cfc->ns);
+	kfree(cfc);
+}
+
 static const struct fs_context_operations configfs_context_ops = {
 	.get_tree	= configfs_get_tree,
+	.free		= configfs_fs_context_free,
 };
 
 static int configfs_init_fs_context(struct fs_context *fc)
 {
-	struct configfs_fs_info *fsi;
+	struct configfs_fs_context *cfc;
 
-	fsi = kzalloc_obj(*fsi);
-	if (!fsi)
+	cfc = kzalloc_obj(*cfc);
+	if (!cfc)
 		return -ENOMEM;
-	fsi->group.cg_item.ci_name = (char *)root_name;
-	fsi->ns = kobj_ns_grab_current(KOBJ_NS_TYPE_NET);
-	if (fsi->ns) {
-		struct net *netns = to_net_ns(fsi->ns);
+	cfc->ns = kobj_ns_grab_current(KOBJ_NS_TYPE_NET);
+	if (cfc->ns) {
+		struct net *netns = to_net_ns(cfc->ns);
 
 		put_user_ns(fc->user_ns);
 		fc->user_ns = get_user_ns(netns->user_ns);
 	}
-	fc->s_fs_info = fsi;
+	fc->fs_private = cfc;
 	fc->ops = &configfs_context_ops;
-	fc->global = true;
 	return 0;
 }
 
 static void configfs_kill_sb(struct super_block *sb)
 {
-	struct configfs_fs_info *fsi =
-		(struct configfs_fs_info *)(sb->s_fs_info);
-	struct ns_common *ns = fsi->ns;
+	struct configfs_super_info *info =
+		(struct configfs_super_info *)(sb->s_fs_info);
+	struct ns_common *ns = info->ns_tag;
 
 	kill_anon_super(sb);
-	kfree(fsi);
+	kfree(info);
 	kobj_ns_drop(KOBJ_NS_TYPE_NET, ns);
 }
 
