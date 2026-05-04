@@ -129,8 +129,8 @@ struct nvmf_ctrl_options {
 	struct nvmf_host	*host;
 	char			*dhchap_secret;
 	char			*dhchap_ctrl_secret;
-	struct key		*keyring;
-	struct key		*tls_key;
+	key_ref_t		keyring;
+	key_ref_t		tls_key;
 	bool			tls;
 	bool			concat;
 	bool			disable_sqflow;

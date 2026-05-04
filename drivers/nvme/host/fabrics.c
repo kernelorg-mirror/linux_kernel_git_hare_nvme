@@ -722,6 +722,7 @@ static int nvmf_parse_options(struct nvmf_ctrl_options *opts,
 	int ctrl_loss_tmo = NVMF_DEF_CTRL_LOSS_TMO, key_id;
 	uuid_t hostid;
 	char hostnqn[NVMF_NQN_SIZE];
+	key_ref_t keyref;
 	struct key *key;
 
 	/* Set defaults */
@@ -1001,8 +1002,12 @@ static int nvmf_parse_options(struct nvmf_ctrl_options *opts,
 				ret = PTR_ERR(key);
 				goto out;
 			}
-			key_put(opts->keyring);
-			opts->keyring = key;
+			keyref = make_key_ref(key, true);
+			if (opts->keyring) {
+				key = key_ref_to_ptr(opts->keyring);
+				key_put(key);
+			}
+			opts->keyring = keyref;
 			break;
 		case NVMF_OPT_TLS_KEY:
 			if (match_int(args, &key_id) || key_id <= 0) {
@@ -1014,8 +1019,12 @@ static int nvmf_parse_options(struct nvmf_ctrl_options *opts,
 				ret = PTR_ERR(key);
 				goto out;
 			}
-			key_put(opts->tls_key);
-			opts->tls_key = key;
+			keyref = make_key_ref(key, true);
+			if (opts->tls_key) {
+				key = key_ref_to_ptr(opts->tls_key);
+				key_put(key);
+			}
+			opts->tls_key = keyref;
 			break;
 		case NVMF_OPT_DISCOVERY:
 			opts->discovery_nqn = true;
@@ -1282,8 +1291,8 @@ static int nvmf_check_allowed_opts(struct nvmf_ctrl_options *opts,
 void nvmf_free_options(struct nvmf_ctrl_options *opts)
 {
 	nvmf_host_put(opts->host);
-	key_put(opts->keyring);
-	key_put(opts->tls_key);
+	key_put(key_ref_to_ptr(opts->keyring));
+	key_put(key_ref_to_ptr(opts->tls_key));
 	kfree(opts->transport);
 	kfree(opts->traddr);
 	kfree(opts->trsvcid);

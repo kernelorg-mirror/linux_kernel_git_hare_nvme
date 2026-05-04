@@ -646,10 +646,12 @@ static void nvme_auth_free_dhchap(struct nvme_dhchap_queue_context *chap)
 
 void nvme_auth_revoke_tls_key(struct nvme_ctrl *ctrl)
 {
+	struct key *tls_key = key_ref_to_ptr(ctrl->opts->tls_key);
+
 	dev_dbg(ctrl->device, "Wipe generated TLS PSK %08x\n",
-		key_serial(ctrl->opts->tls_key));
-	key_revoke(ctrl->opts->tls_key);
-	key_put(ctrl->opts->tls_key);
+		key_serial(tls_key));
+	key_revoke(tls_key);
+	key_put(tls_key);
 	ctrl->opts->tls_key = NULL;
 }
 EXPORT_SYMBOL_GPL(nvme_auth_revoke_tls_key);
@@ -709,7 +711,7 @@ static int nvme_auth_secure_concat(struct nvme_ctrl *ctrl,
 		goto out_free_digest;
 	}
 
-	tls_key = nvme_tls_psk_refresh(ctrl->opts->keyring,
+	tls_key = nvme_tls_psk_refresh(key_ref_to_ptr(ctrl->opts->keyring),
 				       ctrl->opts->host->nqn,
 				       ctrl->opts->subsysnqn, chap->hash_id,
 				       tls_psk, psk_len, digest);
@@ -723,7 +725,7 @@ static int nvme_auth_secure_concat(struct nvme_ctrl *ctrl,
 	kfree_sensitive(tls_psk);
 	if (ctrl->opts->tls_key)
 		nvme_auth_revoke_tls_key(ctrl);
-	ctrl->opts->tls_key = tls_key;
+	ctrl->opts->tls_key = make_key_ref(tls_key, true);
 out_free_digest:
 	kfree_sensitive(digest);
 out_free_psk:

@@ -825,9 +825,9 @@ static ssize_t tls_configured_key_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
-	struct key *key = ctrl->opts->tls_key;
+	struct key *tls_key = key_ref_to_ptr(ctrl->opts->tls_key);
 
-	return sysfs_emit(buf, "%08x\n", key_serial(key));
+	return sysfs_emit(buf, "%08x\n", key_serial(tls_key));
 }
 
 static ssize_t tls_configured_key_store(struct device *dev,
@@ -877,7 +877,7 @@ static ssize_t tls_keyring_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct nvme_ctrl *ctrl = dev_get_drvdata(dev);
-	struct key *keyring = ctrl->opts->keyring;
+	struct key *keyring = key_ref_to_ptr(ctrl->opts->keyring);
 
 	return sysfs_emit(buf, "%s\n", keyring->description);
 }

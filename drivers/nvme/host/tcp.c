@@ -1742,7 +1742,7 @@ static int nvme_tcp_start_tls(struct nvme_ctrl *nctrl,
 	args.ta_my_peerids[0] = pskid;
 	args.ta_num_peerids = 1;
 	if (nctrl->opts->keyring)
-		keyring = key_serial(nctrl->opts->keyring);
+		keyring = key_serial(key_ref_to_ptr(nctrl->opts->keyring));
 	args.ta_keyring = keyring;
 	args.ta_timeout_ms = tls_handshake_timeout * 1000;
 	queue->tls_err = -EOPNOTSUPP;
@@ -2084,10 +2084,13 @@ static int nvme_tcp_alloc_admin_queue(struct nvme_ctrl *ctrl)
 	key_serial_t pskid = 0;
 
 	if (nvme_tcp_tls_configured(ctrl)) {
-		if (ctrl->opts->tls_key)
-			pskid = key_serial(ctrl->opts->tls_key);
+		struct key *key = key_ref_to_ptr(ctrl->opts->tls_key);
+
+		if (key)
+			pskid = key_serial(key);
 		else if (ctrl->opts->tls) {
-			pskid = nvme_tls_psk_default(ctrl->opts->keyring,
+			key = key_ref_to_ptr(ctrl->opts->keyring);
+			pskid = nvme_tls_psk_default(key,
 						      ctrl->opts->host->nqn,
 						      ctrl->opts->subsysnqn);
 			if (!pskid) {
@@ -2118,16 +2121,18 @@ static int __nvme_tcp_alloc_io_queues(struct nvme_ctrl *ctrl)
 
 	if (nvme_tcp_tls_configured(ctrl)) {
 		if (ctrl->opts->concat) {
+			struct key *tls_key =
+				key_ref_to_ptr(ctrl->opts->tls_key);
 			/*
 			 * The generated PSK is stored in the
 			 * fabric options
 			 */
-			if (!ctrl->opts->tls_key) {
+			if (!tls_key) {
 				dev_err(ctrl->device, "no PSK generated\n");
 				return -ENOKEY;
 			}
 			if (ctrl->tls_pskid &&
-			    ctrl->tls_pskid != key_serial(ctrl->opts->tls_key)) {
+			    ctrl->tls_pskid != key_serial(tls_key)) {
 				dev_err(ctrl->device, "Stale PSK id %08x\n", ctrl->tls_pskid);
 				ctrl->tls_pskid = 0;
 			}
