@@ -57,7 +57,9 @@ static const struct super_operations configfs_ops = {
 
 int configfs_is_root(struct config_item *item)
 {
-	return item->ci_name == root_name;
+	struct configfs_dirent *sd =
+		item->ci_dentry->d_fsdata;
+	return sd->s_type == CONFIGFS_ROOT;
 }
 
 static int configfs_fill_super(struct super_block *sb, struct fs_context *fc)
