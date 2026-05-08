@@ -117,9 +117,16 @@ static int configfs_test_super(struct super_block *s, struct fs_context *fc)
 {
 	struct configfs_super_info *info =
 		(struct configfs_super_info *)s->s_fs_info;
-	struct configfs_fs_context *cfc = fc->fs_private;
+	struct net *ns = kobj_ns_grab_current(KOBJ_NS_TYPE_NET);
+	int match = 0;
 
-	return (info->ns == cfc->ns_tag);
+	if (info->ns == ns) {
+		pr_debug("%s: matching ns\n", __func__);
+		match = 1;
+	} else
+		pr_debug("%s: non-matching ns\n", __func__);
+	kobj_ns_drop(KOBJ_NS_TYPE_NET, ns);
+	return match;
 }
 
 static int configfs_set_super(struct super_block *sb, struct fs_context *fc)
