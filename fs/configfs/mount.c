@@ -32,14 +32,14 @@ static int configfs_mnt_count = 0;
 static const char root_name[] = "root";
 
 struct configfs_fs_context {
-	struct ns_common *ns;
+	void *ns_tag;
 };
 
 struct configfs_super_info {
 	struct configfs_dirent root;
 	struct config_group group;
-	struct ns_common *ns_tag;
 	struct super_block *sb;
+	void *ns;
 };
 
 static void configfs_free_inode(struct inode *inode)
@@ -75,7 +75,7 @@ static int configfs_fill_super(struct super_block *sb, struct fs_context *fc)
 
 	INIT_LIST_HEAD(&info->root.s_sibling);
 	INIT_LIST_HEAD(&info->root.s_children);
-	info->ns_tag = cfc->ns;
+	info->ns = cfc->ns_tag;
 	info->root.s_type = CONFIGFS_ROOT;
 	info->root.s_element = &info->group.cg_item;
 	info->group.cg_item.ci_name = (char *)root_name;
@@ -119,7 +119,15 @@ static int configfs_test_super(struct super_block *s, struct fs_context *fc)
 		(struct configfs_super_info *)s->s_fs_info;
 	struct configfs_fs_context *cfc = fc->fs_private;
 
-	return (info->ns_tag == cfc->ns);
+	return (info->ns == cfc->ns_tag);
+}
+
+static int configfs_set_super(struct super_block *sb, struct fs_context *fc)
+{
+	struct configfs_fs_context *cfc = fc->fs_private;
+
+	cfc->ns_tag = NULL;
+	return set_anon_super_fc(sb, fc);
 }
 
 static int configfs_get_tree(struct fs_context *fc)
@@ -127,7 +135,7 @@ static int configfs_get_tree(struct fs_context *fc)
 	struct super_block *sb;
 	int err;
 
-	sb = sget_fc(fc, configfs_test_super, set_anon_super_fc);
+	sb = sget_fc(fc, configfs_test_super, configfs_set_super);
 	if (IS_ERR(sb))
 		return PTR_ERR(sb);
 	if (!sb->s_root) {
@@ -146,9 +154,12 @@ static void configfs_fs_context_free(struct fs_context *fc)
 {
 	struct configfs_fs_context *cfc = fc->fs_private;
 
-	if (cfc->ns)
-		kobj_ns_drop(KOBJ_NS_TYPE_NET, cfc->ns);
+	if (cfc->ns_tag)
+		kobj_ns_drop(KOBJ_NS_TYPE_NET, cfc->ns_tag);
 	kfree(cfc);
+
+	kfree(fc->s_fs_info);
+	fc->s_fs_info = NULL;
 }
 
 static const struct fs_context_operations configfs_context_ops = {
@@ -159,19 +170,19 @@ static const struct fs_context_operations configfs_context_ops = {
 static int configfs_init_fs_context(struct fs_context *fc)
 {
 	struct configfs_fs_context *cfc;
+	struct net *netns;
 
 	cfc = kzalloc_obj(*cfc);
 	if (!cfc)
 		return -ENOMEM;
-	cfc->ns = kobj_ns_grab_current(KOBJ_NS_TYPE_NET);
-	if (cfc->ns) {
-		struct net *netns = to_net_ns(cfc->ns);
-
+	cfc->ns_tag = netns = kobj_ns_grab_current(KOBJ_NS_TYPE_NET);
+	fc->fs_private = cfc;
+	fc->ops = &configfs_context_ops;
+	if (netns) {
 		put_user_ns(fc->user_ns);
 		fc->user_ns = get_user_ns(netns->user_ns);
 	}
-	fc->fs_private = cfc;
-	fc->ops = &configfs_context_ops;
+	fc->global = true;
 	return 0;
 }
 
@@ -179,7 +190,7 @@ static void configfs_kill_sb(struct super_block *sb)
 {
 	struct configfs_super_info *info =
 		(struct configfs_super_info *)(sb->s_fs_info);
-	struct ns_common *ns = info->ns_tag;
+	void *ns = info->ns;
 
 	kill_anon_super(sb);
 	kfree(info);
@@ -191,6 +202,7 @@ static struct file_system_type configfs_fs_type = {
 	.name		= "configfs",
 	.init_fs_context = configfs_init_fs_context,
 	.kill_sb	= configfs_kill_sb,
+	.fs_flags	= FS_USERNS_MOUNT,
 };
 MODULE_ALIAS_FS("configfs");
 
