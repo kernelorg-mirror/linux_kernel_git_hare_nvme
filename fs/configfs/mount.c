@@ -111,9 +111,33 @@ static int configfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	return 0;
 }
 
+static int configfs_test_super(struct super_block *s, struct fs_context *fc)
+{
+	struct configfs_super_info *info =
+		(struct configfs_super_info *)s->s_fs_info;
+	struct configfs_fs_context *cfc = fc->fs_private;
+
+	return (info->ns_tag == cfc->ns);
+}
+
 static int configfs_get_tree(struct fs_context *fc)
 {
-	return get_tree_single(fc, configfs_fill_super);
+	struct super_block *sb;
+	int err;
+
+	sb = sget_fc(fc, configfs_test_super, set_anon_super_fc);
+	if (IS_ERR(sb))
+		return PTR_ERR(sb);
+	if (!sb->s_root) {
+		err = configfs_fill_super(sb, fc);
+		if (err) {
+			deactivate_locked_super(sb);
+			return err;
+		}
+		sb->s_flags |= SB_ACTIVE;
+	}
+	fc->root = dget(sb->s_root);
+	return 0;
 }
 
 static void configfs_fs_context_free(struct fs_context *fc)
